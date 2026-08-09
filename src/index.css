@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: theme('colors.cream');
+    color: theme('colors.ink');
+    font-family: theme('fontFamily.sans');
+    -webkit-font-smoothing: antialiased;
+    /* The app is a fixed-layout phone surface; rubber-banding just reveals the
+       page behind it. */
+    overscroll-behavior: none;
+  }
+
+  /* Capacitor draws under the status bar, so pad the safe area in one place. */
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  /* Matches the design's thin scrollbar on the showcase sidebar. */
+  .thin-scrollbar::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+  .thin-scrollbar::-webkit-scrollbar-thumb {
+    background: theme('colors.line');
+    border-radius: 8px;
+  }
+
+  /* The faint graph-paper wash used for every map canvas. */
+  .map-grid {
+    background-image:
+      linear-gradient(theme('colors.mapGrid') 1px, transparent 1px),
+      linear-gradient(90deg, theme('colors.mapGrid') 1px, transparent 1px);
+  }
+}

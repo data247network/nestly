@@ -1,0 +1,146 @@
+# Builds the Nestly Android APK -> release/Nestly.apk (or Nestly-release.apk).
+#
+# Adapted from the build script already proven on this machine for
+# grandma-fish-erp and vitalis, which solved the two local problems this build
+# also hits:
+#
+#   1. Path/sync interference - building in place can trip over OneDrive
+#      "files on-demand" placeholders, which are reparse points Gradle rejects
+#      with "not a regular file". Copying the android project plus the Capacitor
+#      node_modules it references to a plain temp dir materialises real files and
+#      sidesteps it entirely.
+#
+#   2. JDK version - the globally installed JDK (26 here) is far too new for the
+#      Gradle 8.2 that Capacitor 6 ships with. We point the build at JDK 17.
+#
+# Prereqs (already set up under C:\Users\<you>\.fbms-android by default):
+#   - JDK 17       (-JavaHome)
+#   - Android SDK  (-SdkDir) with platform-34 + build-tools;34.0.0
+#
+# Usage:
+#   powershell -ExecutionPolicy Bypass -File scripts\build-apk.ps1 -Sync
+#   powershell -ExecutionPolicy Bypass -File scripts\build-apk.ps1 -Sync -Release
+#     -Sync     first runs `npm run android:sync` to refresh the web assets.
+#     -Release  builds assembleRelease and signs with android/keystore.properties.
+
+param(
+  [string]$JavaHome = "",
+  [string]$SdkDir = "$env:USERPROFILE\.fbms-android\sdk",
+  [switch]$Sync,
+  [switch]$Release
+)
+$ErrorActionPreference = "Stop"
+$proj = Split-Path -Parent $PSScriptRoot
+
+if (-not $JavaHome) {
+  $JavaHome = (Get-ChildItem "$env:USERPROFILE\.fbms-android\jdk17" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'jdk-17*' } | Select-Object -First 1).FullName
+}
+if (-not $JavaHome -or -not (Test-Path $JavaHome)) {
+  throw "JDK 17 not found. Pass -JavaHome <path to a JDK 17>."
+}
+if (-not (Test-Path "$SdkDir\platforms\android-34")) {
+  throw "Android SDK (platform-34) not found at $SdkDir. Pass -SdkDir <path>."
+}
+
+if ($Sync) {
+  Write-Host "Refreshing web assets (npm run android:sync)..."
+  Push-Location $proj
+  & npm.cmd run android:sync
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "android:sync failed." }
+  Pop-Location
+}
+
+if ($Release) {
+  $props = "$proj\android\keystore.properties"
+  if (-not (Test-Path $props)) {
+    throw @"
+Release build needs signing credentials.
+
+  1. Create a keystore (keep it safe - losing it means you can never update
+     an app already installed from it):
+
+       keytool -genkeypair -v -keystore android\nestly-release.jks ``
+         -keyalg RSA -keysize 2048 -validity 10000 -alias nestly
+
+  2. Copy android\keystore.properties.example to android\keystore.properties
+     and fill in the passwords.
+
+See docs/DISTRIBUTION.md. Or build a debug APK by omitting -Release.
+"@
+  }
+}
+
+$build = "$env:TEMP\nestly-apk-build"
+if (Test-Path $build) { Remove-Item -Recurse -Force $build }
+New-Item -ItemType Directory -Force -Path $build | Out-Null
+
+Write-Host "Copying project to $build ..."
+Copy-Item -Recurse -Force "$proj\android" "$build\android"
+
+# Every Capacitor plugin's android/ folder is referenced by relative path from
+# android/capacitor.settings.gradle, so each one has to come along.
+$modules = @(
+  "@capacitor\android",
+  "@capacitor-community\bluetooth-le",
+  "@capacitor\filesystem",
+  "@capacitor\geolocation",
+  "@capacitor\network",
+  "@capacitor\preferences",
+  "@capacitor\share",
+  "@capacitor\splash-screen",
+  "@capacitor\status-bar"
+)
+foreach ($m in $modules) {
+  $src = "$proj\node_modules\$m"
+  if (-not (Test-Path $src)) { throw "Missing node module: $m (run npm install)" }
+  $dest = "$build\node_modules\$m"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+  Copy-Item -Recurse -Force $src $dest
+}
+
+Set-Content "$build\android\local.properties" ("sdk.dir=" + ($SdkDir -replace '\\', '/')) -Encoding ascii
+
+$env:JAVA_HOME = $JavaHome
+$env:ANDROID_HOME = $SdkDir
+$env:PATH = "$JavaHome\bin;$env:PATH"
+
+$task = if ($Release) { "assembleRelease" } else { "assembleDebug" }
+Write-Host "Building $task with JDK 17 ($JavaHome)..."
+Push-Location "$build\android"
+& ".\gradlew.bat" $task --no-daemon
+$code = $LASTEXITCODE
+Pop-Location
+if ($code -ne 0) { throw "Gradle build failed (exit $code)." }
+
+$variant = if ($Release) { "release" } else { "debug" }
+$apk = "$build\android\app\build\outputs\apk\$variant\app-$variant.apk"
+if (-not (Test-Path $apk)) {
+  # An unsigned release build lands under a slightly different name.
+  $apk = "$build\android\app\build\outputs\apk\$variant\app-$variant-unsigned.apk"
+}
+if (-not (Test-Path $apk)) { throw "Could not find the built APK under $build\android\app\build\outputs\apk\$variant" }
+
+New-Item -ItemType Directory -Force -Path "$proj\release" | Out-Null
+$out = if ($Release) { "$proj\release\Nestly-release.apk" } else { "$proj\release\Nestly.apk" }
+Copy-Item -Force $apk $out
+$sizeMb = [math]::Round((Get-Item $out).Length / 1MB, 1)
+
+# Report who signed it - a debug signature is the usual reason a sideload is
+# refused on someone else's phone, so make it impossible to ship one unaware.
+$signer = Join-Path $SdkDir "build-tools\34.0.0\apksigner.bat"
+$signedBy = "unknown"
+if (Test-Path $signer) {
+  $certs = & $signer verify --print-certs $out 2>&1 | Out-String
+  if ($certs -match 'certificate DN:\s*(.+)') { $signedBy = $Matches[1].Trim() }
+  elseif ($certs -match 'not signed') { $signedBy = "NOT SIGNED" }
+}
+
+Write-Host ""
+Write-Host "Done -> $(Split-Path -Leaf $out) ($sizeMb MB)" -ForegroundColor Green
+Write-Host "Signed by: $signedBy"
+if ($signedBy -match 'Android Debug') {
+  Write-Host "WARNING: debug signature. Play Protect often refuses these on other" -ForegroundColor Yellow
+  Write-Host "         phones. Use -Release for anything you hand to someone else." -ForegroundColor Yellow
+}
+Write-Host "Sideload it with:  adb install -r $(Split-Path -Leaf $out)"
