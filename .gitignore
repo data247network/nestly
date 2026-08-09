@@ -20,3 +20,8 @@ android/capacitor-cordova-android-plugins/
 
 .DS_Store
 *.log
+
+# Secrets. Never commit these.
+.env
+.env.*
+!.env.example
