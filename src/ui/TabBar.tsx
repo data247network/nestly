@@ -96,6 +96,7 @@ function activeTab(screen: ScreenId): ScreenId | null {
   if (screen === 'alerts' || screen === 'acoustic') return 'home'
   if (screen === 'trail') return 'report'
   if (screen === 'childSetup' || screen === 'plans' || screen === 'contacts') return 'pair'
+  if (screen === 'household') return 'pair'
   return TABS.some((t) => t.id === screen) ? screen : null
 }
 

@@ -19,6 +19,7 @@ import { Filtering } from '../screens/filtering'
 import { ChildHome, ChildLock, ChildNotice } from '../screens/child'
 import { ChildSetup, PairChild, RoleGate } from '../screens/setup'
 import { ActivityReport } from '../screens/report'
+import { Household } from '../screens/household'
 import { Plans } from '../screens/plans'
 import { Paywall, WebOverview, WebSplit } from '../screens/web'
 
@@ -44,6 +45,7 @@ const SCREENS: Record<ScreenId, () => JSX.Element> = {
   roleGate: RoleGate,
   pair: () => <PairChild />,
   childSetup: ChildSetup,
+  household: Household,
   plans: Plans,
   report: ActivityReport,
   childHome: ChildHome,

@@ -27,6 +27,7 @@ export type ScreenId =
   /** Per-child settings, opened by tapping a device in the Device tab. */
   | 'childSetup'
   | 'plans'
+  | 'household'
   // Version 2 — the child device
   | 'childHome'
   | 'childLock'

@@ -289,6 +289,16 @@ export function PairChild({ onDone }: { onDone?: () => void }) {
           onClick={() => go('contacts')}
         />
 
+        {/*
+          The way into the account side. Without it the household existed only
+          in the database and an account appeared to do nothing at all.
+        */}
+        <Row
+          title="Household"
+          hint="Your family on the account — add a child and get their setup code"
+          onClick={() => go('household')}
+        />
+
         <Row
           title="Plan"
           hint={`${capacity.plan.name} · ${capacity.used} of ${capacity.limit} children`}

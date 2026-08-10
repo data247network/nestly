@@ -100,6 +100,107 @@ export async function ensureHousehold(): Promise<string | null> {
   return created.id as string
 }
 
+/* ------------------------------------------------------ household reads */
+
+export type CloudChild = {
+  id: string
+  name: string
+  avatar: string
+  enrolledAt: string | null
+  deviceId: string | null
+}
+
+export type HouseholdSummary = {
+  id: string
+  name: string
+  plan: string
+  memberCount: number
+  children: CloudChild[]
+}
+
+export async function loadHousehold(householdId: string): Promise<HouseholdSummary | null> {
+  if (!hasCloud()) return null
+  const db = supabase()
+
+  const [{ data: house }, { data: kids }, { count }] = await Promise.all([
+    db.from('households').select('id, name, plan').eq('id', householdId).maybeSingle(),
+    db
+      .from('children')
+      .select('id, name, avatar, enrolled_at, device_id')
+      .eq('household_id', householdId)
+      .order('name'),
+    db
+      .from('household_members')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('household_id', householdId),
+  ])
+
+  if (!house) return null
+  return {
+    id: house.id as string,
+    name: house.name as string,
+    plan: (house.plan as string) ?? 'free',
+    memberCount: count ?? 1,
+    children: (kids ?? []).map((k) => ({
+      id: k.id as string,
+      name: k.name as string,
+      avatar: (k.avatar as string) ?? '#147D77',
+      enrolledAt: (k.enrolled_at as string) ?? null,
+      deviceId: (k.device_id as string) ?? null,
+    })),
+  }
+}
+
+export async function renameHousehold(householdId: string, name: string) {
+  if (!hasCloud()) return
+  await supabase().from('households').update({ name: name.trim() || 'My family' }).eq('id', householdId)
+}
+
+/** Creates the child record first; the device attaches to it later by code. */
+export async function createChild(householdId: string, name: string, avatar: string) {
+  const { data, error } = await supabase()
+    .from('children')
+    .insert({ household_id: householdId, name: name.trim() || 'My child', avatar })
+    .select('id')
+    .single()
+  if (error) throw error
+  return data.id as string
+}
+
+export async function removeChild(childId: string) {
+  if (!hasCloud()) return
+  await supabase().from('children').delete().eq('id', childId)
+}
+
+/**
+ * Mints an invite code.
+ *
+ * Generated client-side rather than by the database function, which is revoked
+ * from the REST surface — a code generator callable over HTTP would let anyone
+ * burn through the keyspace. The alphabet matches the server's: no I, O, 0 or 1,
+ * because a parent reads this down the phone to a child.
+ *
+ * The primary key does the real work: a collision is a failed insert, so it is
+ * retried rather than silently overwriting someone else's invite.
+ */
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+export async function createInvite(householdId: string, childId: string): Promise<string> {
+  const db = supabase()
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const bytes = crypto.getRandomValues(new Uint8Array(8))
+    const code = Array.from(bytes, (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('')
+
+    const { error } = await db
+      .from('child_invites')
+      .insert({ code, child_id: childId, household_id: householdId })
+    if (!error) return code
+    // 23505 is a unique violation — try another code. Anything else is real.
+    if (error.code !== '23505') throw error
+  }
+  throw new Error('Could not create a code. Try again.')
+}
+
 /* ------------------------------------------------------------------ push */
 
 /** Registers a paired child, or returns the existing row for this device. */
