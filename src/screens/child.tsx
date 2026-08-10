@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useDevice } from '../platform/device'
 import { LinkBadge, ago } from './setup'
 import { FamilyHub } from './hub'
 import { Capacitor } from '@capacitor/core'
 import { NestlyLink } from '../link/ble-peripheral'
-import { Display, GhostButton, PrimaryButton } from '../ui/kit'
+import { hasCloud } from '../cloud/client'
+import { ENROLMENT_KEY, redeemInvite, type Enrolment } from '../cloud/sync'
+import { loadJSON, saveJSON } from '../platform/storage'
+import { Display, FieldLabel, GhostButton, PrimaryButton } from '../ui/kit'
 
 /**
  * The child device.
@@ -100,6 +103,7 @@ function ChildStatus() {
   return (
     <div className="flex flex-col gap-3">
       <ProtectionSetup />
+      <CloudEnrolment />
       <SiteWarning />
       <div className="rounded-2xl bg-cream p-4">
         <div className="text-[12px] font-bold text-body">ROUTINE</div>
@@ -239,6 +243,93 @@ function ProtectionSetup() {
           </span>
         </button>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * Links this phone to the child their parent already created on the account.
+ *
+ * Optional by design. Nestly's promise is that two phones work with no server,
+ * so a child who never enters a code still gets routines, zones and their
+ * emergency numbers over Bluetooth — this only adds the account link, which is
+ * what lets a parent see them while they are apart.
+ */
+function CloudEnrolment() {
+  const { deviceId, name } = useDevice()
+  const [enrolled, setEnrolled] = useState<Enrolment | null>(null)
+  const [open, setOpen] = useState(false)
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void loadJSON<Enrolment | null>(ENROLMENT_KEY, null).then(setEnrolled)
+  }, [])
+
+  if (!hasCloud()) return null
+
+  if (enrolled) {
+    return (
+      <div className="rounded-2xl bg-tint px-4 py-3 text-[11.5px] leading-relaxed text-tealInk">
+        Linked to <b>{enrolled.name}</b> on your family's account.
+      </div>
+    )
+  }
+
+  const submit = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await redeemInvite(code, deviceId, name)
+      await saveJSON(ENROLMENT_KEY, result)
+      setEnrolled(result)
+      setOpen(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'That code could not be used.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full rounded-2xl bg-cream px-4 py-3 text-left"
+      >
+        <span className="block text-[13px] font-bold">Have a setup code?</span>
+        <span className="block text-[11.5px] leading-snug text-body">
+          Links this phone to your family's account, so your parent can see
+          you're okay when you're apart.
+        </span>
+      </button>
+    )
+  }
+
+  return (
+    <div className="rounded-2xl bg-cream p-4">
+      <FieldLabel>SETUP CODE</FieldLabel>
+      <input
+        value={code}
+        onChange={(e) => setCode(e.target.value.toUpperCase())}
+        onKeyDown={(e) => e.key === 'Enter' && void submit()}
+        placeholder="ABCD-1234"
+        autoCapitalize="characters"
+        autoCorrect="off"
+        spellCheck={false}
+        className="w-full rounded-[14px] border-[1.5px] border-line bg-white px-4 py-3 text-center text-[18px] font-bold tracking-[0.15em] outline-none placeholder:font-normal placeholder:tracking-normal placeholder:text-muted focus:border-brand"
+      />
+      {error ? (
+        <div className="mt-3 rounded-xl bg-coralBg px-3 py-2 text-[12px] text-coralInk">{error}</div>
+      ) : null}
+      <div className="mt-3 flex gap-2">
+        <GhostButton onClick={() => setOpen(false)}>Cancel</GhostButton>
+        <PrimaryButton onClick={() => void submit()}>
+          {busy ? 'Linking…' : 'Link this phone'}
+        </PrimaryButton>
+      </div>
     </div>
   )
 }

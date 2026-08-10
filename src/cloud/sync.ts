@@ -100,6 +100,57 @@ export async function ensureHousehold(): Promise<string | null> {
   return created.id as string
 }
 
+/* ---------------------------------------------------------- enrolment -- */
+
+export type Enrolment = {
+  childId: string
+  householdId: string
+  name: string
+  avatar: string
+  deviceSecret: string
+}
+
+/** Where an enrolled child device remembers what it was linked to. */
+export const ENROLMENT_KEY = 'nestly.enrolment'
+
+/**
+ * Redeems an invite code on the child's phone.
+ *
+ * Called with no session, which is the whole point — a child never signs in to
+ * be supervised. It goes to the edge function rather than the REST API because
+ * the code *is* the credential and only the service role may act on it.
+ *
+ * Uses plain fetch rather than the Supabase client: the client would attach an
+ * Authorization header for a session that does not exist, and there is nothing
+ * here for it to do.
+ */
+export async function redeemInvite(
+  code: string,
+  deviceId: string,
+  deviceName?: string,
+): Promise<Enrolment> {
+  const url = import.meta.env.VITE_SUPABASE_URL
+  const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+  if (!url || !key) throw new Error('This build has no online service configured.')
+
+  let res: Response
+  try {
+    res = await fetch(`${url}/functions/v1/enroll-child`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: key },
+      body: JSON.stringify({ code, deviceId, deviceName }),
+    })
+  } catch {
+    throw new Error('No connection. Check the phone is online and try again.')
+  }
+
+  const body = (await res.json().catch(() => ({}))) as { error?: string } & Partial<Enrolment>
+  if (!res.ok) throw new Error(body.error ?? 'That code could not be used.')
+  if (!body.childId || !body.deviceSecret) throw new Error('Setup did not complete. Try again.')
+
+  return body as Enrolment
+}
+
 /* ------------------------------------------------------ household reads */
 
 export type CloudChild = {
