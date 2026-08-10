@@ -39,11 +39,13 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [show, setShow] = useState(false)
 
   const submit = async () => {
     setError(null)
+    setNotice(null)
 
     if (!cloud) {
       if (checkCredentials(email, password)) onSignedIn()
@@ -53,23 +55,32 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
 
     setBusy(true)
     try {
-      const userId =
-        mode === 'signup'
-          ? await cloudSignUp(email.trim(), password)
-          : await cloudSignIn(email.trim(), password)
-
-      // Sign-up may require email confirmation, in which case there is no
-      // session yet and no household to create. Say so rather than dropping the
-      // parent into an app that cannot load anything.
-      if (!userId) {
-        setError('Check your email to confirm the account, then sign in.')
-        return
+      if (mode === 'signup') {
+        const { signedIn } = await cloudSignUp(email.trim(), password)
+        // Email confirmation leaves a user with no session. Nothing is
+        // authenticated yet, so creating the household here would be refused —
+        // send them to sign in once they have confirmed instead.
+        if (!signedIn) {
+          setMode('signin')
+          setPassword('')
+          setNotice('Account created. Confirm your email, then sign in below.')
+          return
+        }
+      } else {
+        await cloudSignIn(email.trim(), password)
       }
 
-      // The household is created by a database trigger in the same transaction
-      // as the insert, so there is no window where it exists without a member.
-      const householdId = await ensureHousehold()
-      if (householdId) await saveJSON(HOUSEHOLD_KEY, householdId)
+      // Signed in for real from here. The household is created by a database
+      // trigger in the same transaction as the insert, so it can never exist
+      // without a member.
+      try {
+        const householdId = await ensureHousehold()
+        if (householdId) await saveJSON(HOUSEHOLD_KEY, householdId)
+      } catch {
+        // Deliberately not fatal. The session is valid; blocking entry over a
+        // failed household lookup would strand a signed-in parent behind a
+        // login screen. CloudBridge retries, and Bluetooth is unaffected.
+      }
 
       onSignedIn()
     } catch (e) {
@@ -121,6 +132,12 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
           </div>
         </div>
       </div>
+
+      {notice ? (
+        <div className="mb-4 rounded-xl bg-tint px-3.5 py-2.5 text-[12.5px] text-tealInk">
+          {notice}
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mb-4 rounded-xl bg-coralBg px-3.5 py-2.5 text-[12.5px] text-coralInk">

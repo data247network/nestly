@@ -31,10 +31,21 @@ export async function signIn(email: string, password: string) {
   return data.user?.id ?? null
 }
 
-export async function signUp(email: string, password: string) {
+/**
+ * Creates an account.
+ *
+ * Returns whether a *session* was established, not merely whether a user row
+ * exists. With email confirmation switched on Supabase returns a user and a
+ * null session — so checking `data.user` says "signed in" when nothing is
+ * authenticated, and the very next call fails against RLS with auth.uid() null.
+ */
+export async function signUp(
+  email: string,
+  password: string,
+): Promise<{ userId: string | null; signedIn: boolean }> {
   const { data, error } = await supabase().auth.signUp({ email, password })
   if (error) throw new Error(friendly(error.message))
-  return data.user?.id ?? null
+  return { userId: data.user?.id ?? null, signedIn: data.session != null }
 }
 
 export async function signOut() {
@@ -45,6 +56,13 @@ export async function signOut() {
 function friendly(message: string): string {
   const m = message.toLowerCase()
   if (m.includes('invalid login')) return 'That email and password do not match.'
+  // Distinct from a wrong password, and the fix is completely different.
+  if (m.includes('not confirmed') || m.includes('confirm your email')) {
+    return 'Confirm your email first — check your inbox, then sign in.'
+  }
+  if (m.includes('rate limit') || m.includes('too many')) {
+    return 'Too many attempts. Wait a minute and try again.'
+  }
   if (m.includes('already registered')) return 'That email already has an account. Try signing in.'
   if (m.includes('password')) return 'Passwords need at least six characters.'
   if (m.includes('network') || m.includes('fetch')) return 'No connection. Your phones still work over Bluetooth.'
