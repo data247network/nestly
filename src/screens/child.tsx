@@ -161,7 +161,8 @@ function ProtectionSetup() {
 
   const needsVpn = !agent.filterConsented
   const needsUsage = !agent.usageAccess
-  if (!needsVpn && !needsUsage) return null
+  const needsContacts = !agent.contactsGranted
+  if (!needsVpn && !needsUsage && !needsContacts) return null
 
   const grantVpn = async () => {
     setBusy(true)
@@ -169,6 +170,17 @@ function ProtectionSetup() {
       await NestlyLink.requestFilterConsent()
     } catch {
       /* the child declined, or this build has no filter */
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const grantContacts = async () => {
+    setBusy(true)
+    try {
+      await NestlyLink.requestContactsPermission()
+    } catch {
+      /* declined, or an older build without the method */
     } finally {
       setBusy(false)
     }
@@ -206,6 +218,24 @@ function ProtectionSetup() {
           <span className="block text-[11.5px] leading-snug text-body">
             Opens Settings. Find Nestly in the list and turn on Usage access, so
             your screen time can be counted.
+          </span>
+        </button>
+      ) : null}
+
+      {needsContacts ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void grantContacts()}
+          className="mt-2 w-full rounded-xl bg-white px-3.5 py-3 text-left disabled:opacity-50"
+        >
+          <span className="block text-[13px] font-bold">Let your parent know about new contacts</span>
+          {/* Stated in the child's own terms, before they tap. The permission
+              dialog says "access your contacts", which sounds far broader than
+              what actually happens — so the limit is spelled out here. */}
+          <span className="block text-[11.5px] leading-snug text-body">
+            Only the name of someone newly saved is shared — never their number,
+            and never the contacts you already have.
           </span>
         </button>
       ) : null}
