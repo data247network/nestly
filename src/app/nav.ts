@@ -46,7 +46,7 @@ export const LABELS: Record<ScreenId, string> = {
   roleGate: 'Choose device role',
   pair: 'Devices',
   childSetup: 'Child device settings',
-  household: 'Household',
+  household: 'Family Hub',
   plans: 'Plans',
   report: 'Reports',
   childHome: 'Child home',

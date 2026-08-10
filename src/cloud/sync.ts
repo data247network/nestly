@@ -91,13 +91,29 @@ export async function ensureHousehold(): Promise<string | null> {
   if (error) throw error
   if (existing?.household_id) return existing.household_id as string
 
-  const { data: created, error: createErr } = await db
-    .from('households')
-    .insert({ name: 'My family' })
-    .select('id')
-    .single()
+  // Insert and read are two statements on purpose.
+  //
+  // `.insert().select()` evaluates RETURNING under the SELECT policy inside the
+  // same statement, and that policy calls `is_household_member`, which is
+  // STABLE — so it sees the snapshot from the *start* of the statement. The
+  // membership row is written by an AFTER INSERT trigger, which is not in that
+  // snapshot. The household is created successfully and then hidden from its
+  // own RETURNING clause, so `.single()` fails and the caller concludes nothing
+  // was created.
+  const { error: createErr } = await db.from('households').insert({ name: 'My family' })
   if (createErr) throw createErr
-  return created.id as string
+
+  // Fresh statement, fresh snapshot: the trigger's membership row is visible.
+  const { data: mine, error: findErr } = await db
+    .from('household_members')
+    .select('household_id')
+    .limit(1)
+    .maybeSingle()
+  if (findErr) throw findErr
+  if (!mine?.household_id) {
+    throw new Error('Your family was created but could not be opened. Try again.')
+  }
+  return mine.household_id as string
 }
 
 /* ---------------------------------------------------------- enrolment -- */
@@ -141,7 +157,12 @@ export async function redeemInvite(
       body: JSON.stringify({ code, deviceId, deviceName }),
     })
   } catch {
-    throw new Error('No connection. Check the phone is online and try again.')
+    // A rejected fetch is deliberately opaque in a browser: a dead network, a
+    // failed DNS lookup and a refused CORS preflight all arrive as the same
+    // TypeError. Blaming the phone's connection was therefore a guess, and a
+    // wrong one — a broken preflight on the function sent us looking at the
+    // child's wifi for hours. Say what is actually known.
+    throw new Error('Could not reach the setup service. Check the phone is online, then try again.')
   }
 
   const body = (await res.json().catch(() => ({}))) as { error?: string } & Partial<Enrolment>

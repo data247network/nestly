@@ -294,7 +294,7 @@ export function PairChild({ onDone }: { onDone?: () => void }) {
           in the database and an account appeared to do nothing at all.
         */}
         <Row
-          title="Household"
+          title="Family Hub"
           hint="Your family on the account — add a child and get their setup code"
           onClick={() => go('household')}
         />

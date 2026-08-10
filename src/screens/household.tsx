@@ -4,12 +4,13 @@ import {
   createChild,
   createInvite,
   currentSession,
+  ensureHousehold,
   loadHousehold,
   removeChild,
   type HouseholdSummary,
 } from '../cloud/sync'
 import { HOUSEHOLD_KEY } from './login'
-import { loadJSON } from '../platform/storage'
+import { loadJSON, saveJSON } from '../platform/storage'
 import { planOf } from '../app/plans'
 import {
   Avatar,
@@ -55,8 +56,23 @@ export function Household() {
       if (!hasCloud()) return setState('signedout')
       const session = await currentSession()
       if (!session) return setState('signedout')
-      const id = await loadJSON<string | null>(HOUSEHOLD_KEY, null)
-      if (!id) return setState('signedout')
+
+      // The stored id is only a cache. Sign-in writes it, but that write is
+      // deliberately non-fatal — so it can legitimately be missing while the
+      // account is perfectly valid, and reading it as "not signed in" told
+      // people to sign in when they already had. Resolve from the session and
+      // repair the cache instead.
+      let id = await loadJSON<string | null>(HOUSEHOLD_KEY, null)
+      if (!id) {
+        try {
+          id = await ensureHousehold()
+          if (id) await saveJSON(HOUSEHOLD_KEY, id)
+        } catch {
+          return setState('error')
+        }
+      }
+      if (!id) return setState('error')
+
       setHouseholdId(id)
       await refresh(id)
     })()
@@ -99,14 +115,14 @@ export function Household() {
   if (state === 'signedout') {
     return (
       <Centered>
-        Sign in to see your household. The phones still work over Bluetooth
-        without an account.
+        Sign in to see your family. The phones still work over Bluetooth without
+        an account.
       </Centered>
     )
   }
 
   if (state === 'error' || !data) {
-    return <Centered>Could not load your household. Check your connection.</Centered>
+    return <Centered>Could not load your family. Check your connection.</Centered>
   }
 
   const plan = planOf(data.plan as never)
