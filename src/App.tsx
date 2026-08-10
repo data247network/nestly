@@ -4,6 +4,7 @@ import { StatusBar, Style } from '@capacitor/status-bar'
 import { SplashScreen } from '@capacitor/splash-screen'
 import { Screen } from './app/Router'
 import { PolicyBridge } from './app/PolicyBridge'
+import { CloudBridge } from './app/CloudBridge'
 import { WEB_SCREENS } from './app/nav'
 import { useStore } from './app/store'
 import { useDevice } from './platform/device'
@@ -42,6 +43,7 @@ export default function App() {
     return (
       <>
         <PolicyBridge />
+      <CloudBridge />
         <Showcase />
       </>
     )
@@ -92,6 +94,7 @@ export default function App() {
   return (
     <div className="safe-top flex h-full flex-col bg-white">
       <PolicyBridge />
+      <CloudBridge />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <Screen id={screen} />
       </div>
