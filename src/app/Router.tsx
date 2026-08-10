@@ -1,5 +1,7 @@
 import type { ScreenId } from './types'
-import { AddChild, EnrollDevice, Onboarding, SignIn } from '../screens/onboarding'
+import { AddChild, EnrollDevice, Onboarding } from '../screens/onboarding'
+import { Login } from '../screens/login'
+import { useDevice } from '../platform/device'
 import {
   AcousticAlert,
   Alerts,
@@ -24,7 +26,7 @@ const SCREENS: Record<ScreenId, () => JSX.Element> = {
   onboard1: () => <Onboarding index={0} />,
   onboard2: () => <Onboarding index={1} />,
   onboard3: () => <Onboarding index={2} />,
-  login: SignIn,
+  login: LoginScreen,
   addChild: AddChild,
   enrollDevice: EnrollDevice,
   home: Home,
@@ -50,6 +52,18 @@ const SCREENS: Record<ScreenId, () => JSX.Element> = {
   webOverview: WebOverview,
   webSplit: WebSplit,
   paywall: Paywall,
+}
+
+/**
+ * The real sign-in, not the design mock.
+ *
+ * The showcase used to render a static placeholder here — fixed email, dotted
+ * password, no working fields — which made the deployed site look like a
+ * brochure and left no way to actually create an account.
+ */
+function LoginScreen() {
+  const { signIn } = useDevice()
+  return <Login onSignedIn={signIn} />
 }
 
 export function Screen({ id }: { id: ScreenId }) {

@@ -47,7 +47,18 @@ export function Showcase() {
           </div>
         ))}
 
-        <p className="mt-auto px-2.5 text-[11px] leading-relaxed text-muted">
+        {/*
+          Without this the deployed site is a gallery with no way into the real
+          product, which is exactly how it read to someone visiting the URL.
+        */}
+        <a
+          href="?app=1"
+          className="mt-auto rounded-xl bg-brand px-3 py-2.5 text-center text-[12.5px] font-bold text-white"
+        >
+          Open the live app →
+        </a>
+
+        <p className="px-2.5 text-[11px] leading-relaxed text-muted">
           Live app — every toggle, slider and message box here is the same code
           that ships in the APK.
         </p>

@@ -39,7 +39,11 @@ export default function App() {
 
   // The desktop showcase is a design review surface, not a device. It sits
   // above the role gate so every screen stays reachable for a walkthrough.
-  if (wide && !native) {
+  //
+  // `?app=1` opts out of it. Without that, a desktop visitor to the deployed
+  // site only ever sees the gallery and has no way to reach the real sign-up —
+  // which made the whole thing look like a static brochure.
+  if (wide && !native && !forcedApp()) {
     return (
       <>
         <PolicyBridge />
@@ -109,6 +113,15 @@ function Splash() {
       <div className="h-12 w-12 rounded-full border-[6px] border-mint" />
     </div>
   )
+}
+
+/** `?app=1` forces the live product on a desktop viewport. */
+function forcedApp(): boolean {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').get('app') === '1'
+  } catch {
+    return false
+  }
 }
 
 function useWideViewport() {
