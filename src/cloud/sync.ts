@@ -229,6 +229,171 @@ export async function loadHousehold(householdId: string): Promise<HouseholdSumma
   }
 }
 
+/**
+ * The numbers on the dashboard's overview row.
+ *
+ * Every one is derived from a real table. A dashboard that invents plausible
+ * figures is worse than one that admits it has none: a parent who sees
+ * "2 alerts today" has to be able to click through and find two alerts, and a
+ * fresh household must be allowed to read zero.
+ *
+ * `null` means "not known yet" and renders as an em dash — distinct from zero,
+ * which is a measurement.
+ */
+export type DashboardStats = {
+  locationsToday: number
+  alertsToday: number
+  screenTimeMinutes: number | null
+  lastSyncAt: string | null
+  devicesLinked: number
+}
+
+/** Event kinds a parent would call an alert, as opposed to routine telemetry. */
+const ALERT_KINDS = [
+  'zone-enter',
+  'zone-leave',
+  'battery-low',
+  'site-blocked',
+  'filter-off',
+  'contact-added',
+]
+
+export async function loadStats(householdId: string): Promise<DashboardStats> {
+  const db = supabase()
+  const startOfDay = new Date()
+  startOfDay.setHours(0, 0, 0, 0)
+  const since = startOfDay.toISOString()
+  const today = new Date().toISOString().slice(0, 10)
+
+  const { data: kids } = await db.from('children').select('id, enrolled_at').eq('household_id', householdId)
+  const ids = (kids ?? []).map((k) => k.id as string)
+  const devicesLinked = (kids ?? []).filter((k) => k.enrolled_at).length
+
+  // No children yet: every count is a true zero, and querying `in ()` would
+  // error rather than return nothing.
+  if (ids.length === 0) {
+    return { locationsToday: 0, alertsToday: 0, screenTimeMinutes: null, lastSyncAt: null, devicesLinked: 0 }
+  }
+
+  const [locations, alerts, usage, sync] = await Promise.all([
+    db
+      .from('child_events')
+      .select('seq', { count: 'exact', head: true })
+      .in('child_id', ids)
+      .gte('ts', since)
+      .not('lat', 'is', null),
+    db
+      .from('child_events')
+      .select('seq', { count: 'exact', head: true })
+      .in('child_id', ids)
+      .gte('ts', since)
+      .in('kind', ALERT_KINDS),
+    db.from('child_usage').select('apps').in('child_id', ids).eq('day', today),
+    db
+      .from('child_telemetry')
+      .select('updated_at')
+      .in('child_id', ids)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+
+  // Absent rows mean the devices have not reported today, which is not the same
+  // as reporting zero minutes.
+  const rows = usage.data ?? []
+  const screenTimeMinutes = rows.length
+    ? rows.reduce((total, row) => {
+        const apps = (row.apps ?? []) as { minutes?: number }[]
+        return total + apps.reduce((sum, a) => sum + (Number(a.minutes) || 0), 0)
+      }, 0)
+    : null
+
+  return {
+    locationsToday: locations.count ?? 0,
+    alertsToday: alerts.count ?? 0,
+    screenTimeMinutes,
+    lastSyncAt: (sync.data?.updated_at as string) ?? null,
+    devicesLinked,
+  }
+}
+
+export type DeviceRow = {
+  childId: string
+  name: string
+  avatar: string
+  enrolled: boolean
+  battery: number | null
+  charging: boolean | null
+  locked: boolean | null
+  lastSeenAt: string | null
+}
+
+/** Per-child device state, for the Devices section. */
+export async function loadDevices(householdId: string): Promise<DeviceRow[]> {
+  const db = supabase()
+  const { data: kids } = await db
+    .from('children')
+    .select('id, name, avatar, enrolled_at')
+    .eq('household_id', householdId)
+    .order('name')
+
+  const ids = (kids ?? []).map((k) => k.id as string)
+  if (ids.length === 0) return []
+
+  const { data: tele } = await db
+    .from('child_telemetry')
+    .select('child_id, battery, charging, locked, updated_at')
+    .in('child_id', ids)
+
+  const byChild = new Map((tele ?? []).map((t) => [t.child_id as string, t]))
+  return (kids ?? []).map((k) => {
+    const t = byChild.get(k.id as string)
+    return {
+      childId: k.id as string,
+      name: k.name as string,
+      avatar: (k.avatar as string) ?? '#147D77',
+      enrolled: Boolean(k.enrolled_at),
+      battery: (t?.battery as number) ?? null,
+      charging: (t?.charging as boolean) ?? null,
+      locked: (t?.locked as boolean) ?? null,
+      lastSeenAt: (t?.updated_at as string) ?? null,
+    }
+  })
+}
+
+export type AlertRow = {
+  id: string
+  childName: string
+  kind: string
+  ref: string | null
+  ts: string
+}
+
+/** The most recent notable events across the household. */
+export async function loadAlerts(householdId: string, limit = 40): Promise<AlertRow[]> {
+  const db = supabase()
+  const { data: kids } = await db.from('children').select('id, name').eq('household_id', householdId)
+  const ids = (kids ?? []).map((k) => k.id as string)
+  if (ids.length === 0) return []
+  const names = new Map((kids ?? []).map((k) => [k.id as string, k.name as string]))
+
+  const { data } = await db
+    .from('child_events')
+    .select('id, child_id, kind, ref, ts')
+    .in('child_id', ids)
+    .in('kind', ALERT_KINDS)
+    .order('ts', { ascending: false })
+    .limit(limit)
+
+  return (data ?? []).map((e) => ({
+    id: String(e.id),
+    childName: names.get(e.child_id as string) ?? 'Child',
+    kind: e.kind as string,
+    ref: (e.ref as string) ?? null,
+    ts: e.ts as string,
+  }))
+}
+
 export async function renameHousehold(householdId: string, name: string) {
   if (!hasCloud()) return
   await supabase().from('households').update({ name: name.trim() || 'My family' }).eq('id', householdId)

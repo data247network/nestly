@@ -11,10 +11,17 @@ import {
   signIn,
   signOut,
   signUp,
+  loadStats,
+  loadDevices,
+  loadAlerts,
+  type DashboardStats,
+  type DeviceRow,
+  type AlertRow,
   type HouseholdSummary,
 } from '../cloud/sync'
 import { planOf } from '../app/plans'
 import { Display } from '../ui/kit'
+import { HubChrome, Overview, Card, ago, type HubSection } from './Dashboard'
 
 /**
  * Family Hub, on the web.
@@ -36,12 +43,19 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
   const [stage, setStage] = useState<Stage>('checking')
   const [householdId, setHouseholdId] = useState<string | null>(null)
   const [data, setData] = useState<HouseholdSummary | null>(null)
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [email, setEmail] = useState<string | null>(null)
+  const [section, setSection] = useState<HubSection>('dashboard')
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async (id: string) => {
     try {
       setData(await loadHousehold(id))
       setStage('ready')
+      // Stats load after the household, and their failure is not fatal: a
+      // dashboard missing its counters is still useful, whereas a dashboard
+      // that refuses to render because one aggregate query failed is not.
+      loadStats(id).then(setStats).catch(() => setStats(null))
     } catch {
       setStage('error')
     }
@@ -57,6 +71,7 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
     if (!hasCloud()) return setStage('error')
     const session = await currentSession()
     if (!session) return setStage('anon')
+    setEmail(session.email)
     try {
       const id = await ensureHousehold()
       if (!id) return setStage('error')
@@ -96,7 +111,37 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
     )
   }
 
-  return <Family data={data} householdId={householdId} onChanged={() => void load(householdId)} />
+  const refresh = () => void load(householdId)
+
+  return (
+    <HubChrome
+      section={section}
+      onSection={setSection}
+      email={email}
+      onSignOut={() => void signOut().then(() => window.location.assign('/'))}
+    >
+      {section === 'dashboard' ? (
+        <Overview
+          data={data}
+          stats={stats}
+          email={email}
+          onAddChild={() => setSection('children')}
+        />
+      ) : section === 'children' ? (
+        <Family data={data} householdId={householdId} onChanged={refresh} />
+      ) : section === 'devices' ? (
+        <Devices householdId={householdId} />
+      ) : section === 'alerts' ? (
+        <Alerts householdId={householdId} />
+      ) : section === 'billing' ? (
+        <Billing data={data} />
+      ) : section === 'settings' ? (
+        <Settings data={data} householdId={householdId} onChanged={refresh} />
+      ) : (
+        <Pending label="Activity" />
+      )}
+    </HubChrome>
+  )
 }
 
 /* -------------------------------------------------------------------- auth */
@@ -523,6 +568,182 @@ function Centered({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center text-[13.5px] leading-relaxed text-body">
       {children}
+    </div>
+  )
+}
+
+/* ----------------------------------------------------------------- devices */
+
+const KIND_LABEL: Record<string, string> = {
+  'zone-enter': 'Arrived at',
+  'zone-leave': 'Left',
+  'battery-low': 'Battery low',
+  'site-blocked': 'Blocked site',
+  'filter-off': 'Web filtering turned off',
+  'contact-added': 'New contact added',
+}
+
+function Devices({ householdId }: { householdId: string }) {
+  const [rows, setRows] = useState<DeviceRow[] | null>(null)
+
+  useEffect(() => {
+    void loadDevices(householdId).then(setRows).catch(() => setRows([]))
+  }, [householdId])
+
+  if (!rows) return <Centered>Loading devices…</Centered>
+
+  return (
+    <>
+      <Display className="text-[26px]">Devices</Display>
+      <p className="mt-1 text-[13.5px] text-body">
+        What each child's phone last reported. A phone out of range keeps
+        enforcing its routines and reports when it reconnects.
+      </p>
+
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        {rows.map((d) => (
+          <Card key={d.childId} title={d.name}>
+            {d.enrolled ? (
+              <>
+                <div className="text-[13.5px] font-bold text-ink">
+                  {d.battery == null ? 'No report yet' : `Battery ${d.battery}%`}
+                  {d.charging ? ' · charging' : ''}
+                </div>
+                <div className="mt-0.5 text-[12px] text-body">
+                  {d.locked ? 'Screen locked by a routine' : 'Not locked'} · last seen{' '}
+                  {ago(d.lastSeenAt)}
+                </div>
+              </>
+            ) : (
+              <div className="text-[12.5px] text-body">
+                No phone linked yet. Send this child a setup link from Children.
+              </div>
+            )}
+          </Card>
+        ))}
+        {rows.length === 0 ? <Pending label="Devices" /> : null}
+      </div>
+    </>
+  )
+}
+
+/* ------------------------------------------------------------------ alerts */
+
+function Alerts({ householdId }: { householdId: string }) {
+  const [rows, setRows] = useState<AlertRow[] | null>(null)
+
+  useEffect(() => {
+    void loadAlerts(householdId).then(setRows).catch(() => setRows([]))
+  }, [householdId])
+
+  if (!rows) return <Centered>Loading alerts…</Centered>
+
+  return (
+    <>
+      <Display className="text-[26px]">Alerts</Display>
+      <p className="mt-1 text-[13.5px] text-body">
+        Zone crossings, blocked sites, low battery and new contacts.
+      </p>
+
+      {rows.length === 0 ? (
+        <div className="mt-6 rounded-2xl border border-dashed border-line2 px-5 py-8 text-center text-[13px] text-body">
+          Nothing yet. Alerts appear here once a phone is linked and reporting.
+        </div>
+      ) : (
+        <ul className="mt-6 flex flex-col gap-2">
+          {rows.map((a) => (
+            <li
+              key={a.id}
+              className="flex flex-wrap items-center gap-2 rounded-2xl border border-line px-4 py-3"
+            >
+              <span className="text-[13.5px] font-bold text-ink">{a.childName}</span>
+              <span className="text-[13px] text-body">
+                {KIND_LABEL[a.kind] ?? a.kind}
+                {a.ref ? ` ${a.ref}` : ''}
+              </span>
+              <span className="ml-auto text-[11.5px] text-muted">{ago(a.ts)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
+/* ----------------------------------------------------------------- billing */
+
+function Billing({ data }: { data: HouseholdSummary }) {
+  const plan = planOf(data.plan as never)
+  return (
+    <>
+      <Display className="text-[26px]">Plan & billing</Display>
+      <p className="mt-1 text-[13.5px] text-body">
+        You are on the {plan.name} plan — up to {plan.children} children and{' '}
+        {plan.parents} {plan.parents === 1 ? 'adult' : 'adults'}.
+      </p>
+      <div className="mt-6 rounded-2xl bg-amberBg px-5 py-4 text-[12.5px] leading-relaxed text-[#8A5A16]">
+        Card and bank payments are not connected yet. Subscriptions will be
+        bought here on the web rather than inside the app, which is what keeps
+        the price the same on every phone.
+      </div>
+    </>
+  )
+}
+
+/* ---------------------------------------------------------------- settings */
+
+function Settings({
+  data,
+  householdId,
+  onChanged,
+}: {
+  data: HouseholdSummary
+  householdId: string
+  onChanged: () => void
+}) {
+  const [name, setName] = useState(data.name)
+  const [saved, setSaved] = useState(false)
+
+  return (
+    <>
+      <Display className="text-[26px]">Settings</Display>
+      <div className="mt-6 max-w-md">
+        <label htmlFor="hh" className="text-[11.5px] font-bold tracking-[0.05em] text-body">
+          FAMILY NAME
+        </label>
+        <input
+          id="hh"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="mt-2 w-full rounded-xl border border-line px-4 py-3 text-[14px] outline-none focus:border-brand"
+        />
+        <button
+          type="button"
+          onClick={() =>
+            void renameHousehold(householdId, name).then(() => {
+              setSaved(true)
+              setTimeout(() => setSaved(false), 2000)
+              onChanged()
+            })
+          }
+          className="mt-3 rounded-xl bg-brand px-4 py-2.5 text-[13.5px] font-bold text-white"
+        >
+          {saved ? 'Saved' : 'Save'}
+        </button>
+      </div>
+    </>
+  )
+}
+
+/**
+ * An honest placeholder. It says what is missing rather than showing an empty
+ * chart, because a chart with no data reads as "nothing happened" when the
+ * truth is "this is not built yet".
+ */
+function Pending({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-line2 px-5 py-10 text-center text-[13px] leading-relaxed text-body">
+      {label} is not on the web portal yet — it is in the parent app today.
     </div>
   )
 }

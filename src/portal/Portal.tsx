@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Display, Logo, Wordmark } from '../ui/kit'
 import { Hub } from './Hub'
+import { currentSession } from '../cloud/sync'
+import { hasCloud } from '../cloud/client'
 import { matchPortal, normaliseCode, type PortalRoute } from './routes'
 
 /**
@@ -39,7 +41,30 @@ export function Portal({ route }: { route: PortalRoute }) {
 
 /* ------------------------------------------------------------------ chrome */
 
+/**
+ * Whether anyone is signed in, for the header alone.
+ *
+ * Undefined while unknown, which is not the same as signed out: rendering
+ * "Sign in" during the check makes the button flicker to "Family Hub" a moment
+ * later on every single page load.
+ */
+function useSignedIn(): boolean | undefined {
+  const [signedIn, setSignedIn] = useState<boolean | undefined>(undefined)
+  useEffect(() => {
+    if (!hasCloud()) return setSignedIn(false)
+    let live = true
+    void currentSession()
+      .then((s) => live && setSignedIn(s != null))
+      .catch(() => live && setSignedIn(false))
+    return () => {
+      live = false
+    }
+  }, [])
+  return signedIn
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
+  const signedIn = useSignedIn()
   return (
     <div className="min-h-full bg-white">
       <header className="border-b border-line">
@@ -51,12 +76,16 @@ function Shell({ children }: { children: React.ReactNode }) {
             <a href="/download" className="hover:text-brand">
               Download
             </a>
-            <a
-              href="/signin"
-              className="rounded-xl bg-brand px-4 py-2.5 text-white transition hover:bg-brandDark"
-            >
-              Sign in
-            </a>
+            {signedIn === undefined ? (
+              <span className="px-4 py-2.5 text-transparent">Sign in</span>
+            ) : (
+              <a
+                href={signedIn ? '/hub' : '/signin'}
+                className="rounded-xl bg-brand px-4 py-2.5 text-white transition hover:bg-brandDark"
+              >
+                {signedIn ? 'Family Hub' : 'Sign in'}
+              </a>
+            )}
           </nav>
         </div>
       </header>
@@ -77,6 +106,37 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 /* ----------------------------------------------------------------- landing */
+
+const BENEFITS = [
+  {
+    icon: '🛡',
+    title: 'Real-time monitoring',
+    body: 'See what is happening now, and what happened while you were apart.',
+    bg: '#E4F5F2',
+    fg: '#147D77',
+  },
+  {
+    icon: '📍',
+    title: 'Location tracking',
+    body: 'Zones for home and school that tell you on arrival and departure.',
+    bg: '#EFEBFB',
+    fg: '#8B7FD1',
+  },
+  {
+    icon: '⏱',
+    title: 'Screen time limits',
+    body: 'Routines that lock the phone at bedtime, enforced with no signal.',
+    bg: '#FFF3DE',
+    fg: '#8A5A16',
+  },
+  {
+    icon: '🔔',
+    title: 'Instant alerts',
+    body: 'Blocked sites, low battery and new contacts, as they happen.',
+    bg: '#FFE9E6',
+    fg: '#C94A3B',
+  },
+]
 
 const STEPS = [
   {
@@ -111,7 +171,26 @@ function Landing() {
           signal doesn't — because the rules live on your child's phone, not on
           our servers.
         </p>
-        <div className="mt-7 flex flex-wrap gap-3">
+        {/* The four things a parent is actually buying, stated before any
+            call to action. Each one is a capability the app really has — this
+            row is not aspirational. */}
+        <div className="mt-9 grid max-w-3xl gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {BENEFITS.map((b) => (
+            <div key={b.title}>
+              <span
+                aria-hidden
+                className="flex h-11 w-11 items-center justify-center rounded-2xl text-[19px]"
+                style={{ background: b.bg, color: b.fg }}
+              >
+                {b.icon}
+              </span>
+              <h3 className="mt-2.5 text-[13.5px] font-bold">{b.title}</h3>
+              <p className="mt-0.5 text-[12px] leading-relaxed text-body">{b.body}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-9 flex flex-wrap gap-3">
           <a
             href="/download"
             className="rounded-xl bg-brand px-5 py-3 text-[14px] font-bold text-white transition hover:bg-brandDark"
