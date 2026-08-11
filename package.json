@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "cap:build": "vite build",
+    "cap:build": "vite build --mode native",
     "android:add": "cap add android",
     "android:sync": "npm run cap:build && cap sync android",
     "android:open": "npm run android:sync && cap open android",
