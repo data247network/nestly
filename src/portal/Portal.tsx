@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Display, Logo, Wordmark } from '../ui/kit'
+import { Hub } from './Hub'
 import { matchPortal, normaliseCode, type PortalRoute } from './routes'
 
 /**
@@ -26,6 +27,13 @@ const VERSION = '1.0'
 export function Portal({ route }: { route: PortalRoute }) {
   if (route.name === 'setup') return <SetupLanding code={route.code} />
   if (route.name === 'download') return <Downloads />
+  if (route.name === 'signin' || route.name === 'signup' || route.name === 'hub') {
+    return (
+      <Shell>
+        <Hub intent={route.name} />
+      </Shell>
+    )
+  }
   return <Landing />
 }
 
@@ -44,7 +52,7 @@ function Shell({ children }: { children: React.ReactNode }) {
               Download
             </a>
             <a
-              href="/?app=1"
+              href="/signin"
               className="rounded-xl bg-brand px-4 py-2.5 text-white transition hover:bg-brandDark"
             >
               Sign in
@@ -111,7 +119,7 @@ function Landing() {
             Download the app
           </a>
           <a
-            href="/?app=1"
+            href="/hub"
             className="rounded-xl border border-line px-5 py-3 text-[14px] font-bold text-brand"
           >
             Open Family Hub
