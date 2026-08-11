@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         // The child device's BLE peripheral role has no community plugin, so
         // it is registered here before the bridge starts.
         registerPlugin(NestlyLinkPlugin.class);
+        registerPlugin(NestlyUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

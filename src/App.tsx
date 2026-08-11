@@ -10,6 +10,7 @@ import { useStore } from './app/store'
 import { useDevice } from './platform/device'
 import { Showcase } from './showcase/Showcase'
 import { Portal, currentPortalRoute } from './portal/Portal'
+import { UpdateBanner } from './app/UpdateBanner'
 import { TabBar, showsTabBar } from './ui/TabBar'
 import { RoleGate } from './screens/setup'
 import { Onboarding } from './screens/onboarding'
@@ -108,6 +109,7 @@ export default function App() {
       <PolicyBridge />
       <CloudBridge />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <UpdateBanner />
         <Screen id={screen} />
       </div>
       {showsTabBar(screen) ? <TabBar /> : null}

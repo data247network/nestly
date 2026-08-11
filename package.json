@@ -22,7 +22,8 @@
     "verify:devices": "node scripts/verify-two-devices.mjs",
     "verify:phone": "powershell -ExecutionPolicy Bypass -File scripts/verify-on-device.ps1",
     "android:apk": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Sync",
-    "android:apk:release": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Sync -Release"
+    "android:apk:release": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Sync -Release",
+    "apk:publish": "node scripts/publish-apk.mjs"
   },
   "dependencies": {
     "@capacitor-community/bluetooth-le": "^6.1.0",

@@ -65,6 +65,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      Lets the app hand a downloaded update to Android's package installer.
+      Needed because Nestly is sideloaded from nestly.app rather than installed
+      from a store, so nothing else is around to update it. The user still sees
+      and confirms the system install dialog; this only grants the right to ask.
+
+      REMOVE THIS BEFORE PUBLISHING TO GOOGLE PLAY. Play distributes and updates
+      the app itself, and an APK that can install APKs is grounds for rejection
+      under the Device and Network Abuse policy.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
       Location is the product. COARSE is requested alongside FINE because from
       Android 12 the user can grant approximate-only, and the app has to keep
       working (zone-level accuracy) when they do.

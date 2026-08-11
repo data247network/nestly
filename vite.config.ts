@@ -1,14 +1,32 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type PluginOption } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 
 const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
 ) as { version: string }
 
+/**
+ * Keeps the published APK out of the APK.
+ *
+ * `public/downloads` holds the binary the web portal serves, and Vite copies
+ * everything in `public/` into `dist/`, which Capacitor then packages into the
+ * app's assets. The result is a build that contains a copy of itself and is
+ * twice the size — and every release would embed the previous one, so it
+ * compounds.
+ */
+const excludeDownloadsFromNative = (): PluginOption => ({
+  name: 'nestly-exclude-downloads',
+  apply: 'build',
+  closeBundle() {
+    const dir = fileURLToPath(new URL('./dist/downloads', import.meta.url))
+    rmSync(dir, { recursive: true, force: true })
+  },
+})
+
 export default defineConfig(({ mode }) => ({
-  plugins: [react()],
+  plugins: [react(), ...(mode === 'native' ? [excludeDownloadsFromNative()] : [])],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
