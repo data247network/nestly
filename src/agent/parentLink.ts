@@ -16,6 +16,8 @@ export type ChildLive = {
   /** Wall-clock time the parent last heard anything at all from this child. */
   lastSeenAt: number | null
   policyVersion: number
+  /** The account-level child this phone is enrolled as, if it is enrolled. */
+  cloudChildId?: string
 }
 
 export type ParentLinkHandlers = {
@@ -119,6 +121,10 @@ export class ParentLink {
       telemetry: this.child?.telemetry ?? null,
       lastSeenAt: Date.now(),
       policyVersion: hello.policyVersion,
+      // Keep what we already knew if this hello omits it. An enrolled phone
+      // that reconnects before its enrolment is re-read would otherwise appear
+      // to have lost its identity, and the parent would mint a duplicate.
+      cloudChildId: hello.cloudChildId ?? this.child?.cloudChildId,
     }
     this.handlers.onChild(this.child)
 
@@ -138,6 +144,7 @@ export class ParentLink {
       telemetry: t,
       lastSeenAt: Date.now(),
       policyVersion: this.child?.policyVersion ?? 0,
+      cloudChildId: this.child?.cloudChildId,
     }
     this.handlers.onChild(this.child)
   }

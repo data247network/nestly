@@ -112,6 +112,14 @@ type DeviceCtx = {
 
   /** Child only. */
   agent: AgentSnapshot | null
+  /**
+   * Child only. Re-announces this phone to the parent after it is enrolled.
+   *
+   * Hello is otherwise sent only when a connection is established, and the link
+   * is usually already up by the time a code is entered — so without this the
+   * parent would not learn the cloud identity until the next disconnect.
+   */
+  announceEnrolment: () => Promise<void>
 
   /** Notes, both roles. On a parent these carry the child they belong to. */
   notes: ChildNote[]
@@ -511,6 +519,10 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
     )
   }, [role, childLink, linkByChild])
 
+  const announceEnrolment = useCallback(async () => {
+    await agentRef.current?.announce()
+  }, [])
+
   const value = useMemo<DeviceCtx>(
     () => ({
       ready,
@@ -540,10 +552,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       onChildEvents,
       onChildUsage,
       agent,
+      announceEnrolment,
       notes,
       sendNote,
     }),
-    [ready, onboarded, completeOnboarding, signedIn, signIn, signOut, role, id, name, setRole, reset, pairings, linkByChild, aggregate, childList, scan, pair, unpair, renameDevice, refresh, refreshing, pushPolicy, onChildEvents, onChildUsage, agent, notes, sendNote],
+    [ready, onboarded, completeOnboarding, signedIn, signIn, signOut, role, id, name, setRole, reset, pairings, linkByChild, aggregate, childList, scan, pair, unpair, renameDevice, refresh, refreshing, pushPolicy, onChildEvents, onChildUsage, agent, announceEnrolment, notes, sendNote],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

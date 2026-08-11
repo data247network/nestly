@@ -106,6 +106,13 @@ export const KEYS = {
   onboarded: 'nestly.onboarded',
   signedIn: 'nestly.signedIn',
   notes: 'nestly.notes',
+  /**
+   * What an enrolled child device was linked to. Declared here, alongside every
+   * other key, rather than in `cloud/sync` — the child agent needs to read it,
+   * and importing it from there would pull the Supabase client into the offline
+   * path for the sake of one string.
+   */
+  enrolment: 'nestly.enrolment',
 } as const
 
 /** Per-child key suffixes, so each paired device keeps its own cursor. */

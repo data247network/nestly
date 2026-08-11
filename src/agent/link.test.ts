@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChildAgent, setSimulatedFix } from './childAgent'
 import { ParentLink } from './parentLink'
 import { BaseTransport, type Transport } from '../link/transport'
-import { __resetMemoryForTests } from '../platform/storage'
+import { KEYS, __resetMemoryForTests, saveJSON } from '../platform/storage'
 import type { ChildEvent, Policy } from '../link/protocol'
 
 /**
@@ -310,5 +310,99 @@ describe('parent <-> child link', () => {
     await agent.tick()
     await settle()
     expect(agent.current().locked).toBe(false)
+  })
+})
+
+/**
+ * The child's account identity, and how it reaches the parent.
+ *
+ * This is the seam where a real duplicate came from: the parent had only a BLE
+ * address to identify a child by, so pairing over Bluetooth created a second
+ * cloud child next to the one already added in Family Hub. Identity has to
+ * travel over the link, and it has to survive the ordering that actually
+ * happens on real phones — paired first, enrolled minutes later.
+ */
+describe('enrolled identity over the link', () => {
+  it('omits a cloud id when the phone has never been enrolled', async () => {
+    const { parent, child } = pair()
+    const seen: (string | undefined)[] = []
+
+    const link = track(
+      new ParentLink(parent, { onChild: (c) => seen.push(c.cloudChildId), onEvents: () => {} }),
+    )
+    const agent = track(new ChildAgent(child, { deviceId: 'c', name: 'child' }))
+    await link.start()
+    await agent.start()
+    await settle()
+
+    // Bluetooth-only is a supported product, not a broken state. The parent
+    // must be told nothing rather than be handed something to invent a row from.
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every((id) => id === undefined)).toBe(true)
+  })
+
+  it('carries the cloud id once the phone is enrolled', async () => {
+    await saveJSON(KEYS.enrolment, { childId: 'cloud-child-uuid', name: 'Eliora' })
+
+    const { parent, child } = pair()
+    let latest: string | undefined
+    const link = track(
+      new ParentLink(parent, { onChild: (c) => (latest = c.cloudChildId), onEvents: () => {} }),
+    )
+    const agent = track(new ChildAgent(child, { deviceId: 'c', name: 'child' }))
+    await link.start()
+    await agent.start()
+    await settle()
+
+    expect(latest).toBe('cloud-child-uuid')
+  })
+
+  it('announces an enrolment that happens while already connected', async () => {
+    const { parent, child } = pair()
+    let latest: string | undefined
+    const link = track(
+      new ParentLink(parent, { onChild: (c) => (latest = c.cloudChildId), onEvents: () => {} }),
+    )
+    const agent = track(new ChildAgent(child, { deviceId: 'c', name: 'child' }))
+    await link.start()
+    await agent.start()
+    await settle()
+    expect(latest).toBeUndefined()
+
+    // The real ordering: paired and connected, then a code is entered. Hello is
+    // otherwise only sent on a fresh connection, so without the announce the
+    // parent would keep treating this phone as unenrolled indefinitely.
+    await saveJSON(KEYS.enrolment, { childId: 'late-uuid', name: 'Eliora' })
+    await agent.announce()
+    await settle()
+
+    expect(latest).toBe('late-uuid')
+  })
+
+  it('keeps the known identity when a later hello omits it', async () => {
+    await saveJSON(KEYS.enrolment, { childId: 'sticky-uuid', name: 'Eliora' })
+
+    const { parent, child } = pair()
+    let latest: string | undefined
+    const link = track(
+      new ParentLink(parent, { onChild: (c) => (latest = c.cloudChildId), onEvents: () => {} }),
+    )
+    const agent = track(new ChildAgent(child, { deviceId: 'c', name: 'child' }))
+    await link.start()
+    await agent.start()
+    await settle()
+    expect(latest).toBe('sticky-uuid')
+
+    // An older build, or a hello sent before storage was read, must not be able
+    // to blank an identity the parent already established — that would put the
+    // duplicate straight back. Driven through a real reconnect rather than a
+    // test hook: the agent re-reads storage on every hello, so an absent
+    // enrolment genuinely produces a hello with no cloud id.
+    await saveJSON(KEYS.enrolment, null)
+    child.goOutOfRange()
+    child.comeIntoRange()
+    await settle()
+
+    expect(latest).toBe('sticky-uuid')
   })
 })

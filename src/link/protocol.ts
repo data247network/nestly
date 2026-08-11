@@ -128,6 +128,19 @@ export type Hello = {
   headSeq: number
   /** Policy version the child is currently running. */
   policyVersion: number
+  /**
+   * The child row this phone was enrolled against, when it has been.
+   *
+   * Who a child *is* belongs to the account, not to a radio. Without this the
+   * parent had only a BLE address to go on, so pairing over Bluetooth minted a
+   * second cloud child alongside the one the parent had already created and
+   * enrolled — same name, no device, counting against the plan's child limit.
+   *
+   * Optional because it is legitimately absent twice over: on a phone that is
+   * paired but never enrolled (the Bluetooth-only product, which must keep
+   * working), and on an older build that predates this field.
+   */
+  cloudChildId?: string
 }
 
 export type Telemetry = {

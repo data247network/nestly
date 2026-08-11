@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { hasCloud } from '../cloud/client'
-import { currentSession, pushEvents, pushPolicy, pushTelemetry, upsertChild } from '../cloud/sync'
+import { currentSession, pushEvents, pushPolicy, pushTelemetry } from '../cloud/sync'
 import { HOUSEHOLD_KEY } from '../screens/login'
 import { loadJSON } from '../platform/storage'
 import { useDevice } from '../platform/device'
@@ -45,33 +45,26 @@ export function CloudBridge() {
     }
   }, [role])
 
-  // Register each paired child, so events have something to hang off.
+  // Bind each paired phone to the child it says it was enrolled as.
+  //
+  // Binding only — this never creates a child. It used to, minting one from the
+  // BLE pairing whenever a paired phone had no cloud row yet, and that was
+  // wrong in a way that showed up on a real phone: a parent adds Eliora in
+  // Family Hub, pairs the phone over Bluetooth, and the pairing lands first. A
+  // second Eliora appears with no device against it, counting towards the
+  // plan's child limit, and the enrolment three minutes later attaches to the
+  // original. Two rows, one child.
+  //
+  // The account decides who a child is; Bluetooth is only how their phone is
+  // reached. So a phone that has not been enrolled simply is not mirrored — the
+  // local product is untouched, and Family Hub already says "No phone linked
+  // yet", which is the truth rather than a duplicate pretending otherwise.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
-    let cancelled = false
-
-    void (async () => {
-      if (!ready.current || !householdId.current) return
-      for (const p of pairings) {
-        if (cancelled || childIds.current.has(p.peerId)) continue
-        const local = state.children.find((c) => c.id === p.peerId)
-        try {
-          const id = await upsertChild(householdId.current, {
-            peerId: p.peerId,
-            name: local?.name ?? p.peerName,
-            avatar: local?.avatar ?? '#147D77',
-          })
-          if (id) childIds.current.set(p.peerId, id)
-        } catch {
-          // Offline, or RLS refused. Retried on the next render that matters.
-        }
-      }
-    })()
-
-    return () => {
-      cancelled = true
+    for (const child of liveChildren) {
+      if (child.cloudChildId) childIds.current.set(child.deviceId, child.cloudChildId)
     }
-  }, [role, pairings, state.children])
+  }, [role, liveChildren])
 
   // Policy up, whenever the version the child enforces changes.
   useEffect(() => {

@@ -504,8 +504,24 @@ export class ChildAgent {
 
   /* ---------------------------------------------------------------- link */
 
+  /**
+   * Re-announces this phone to the parent.
+   *
+   * Called after enrolment completes. The agent is normally already running and
+   * connected by then, and hello is otherwise only sent on a fresh connection —
+   * so without this the parent would not learn the cloud identity until the next
+   * time the link dropped and came back, and would go on treating an enrolled
+   * child as an unknown one for however long that took.
+   */
+  async announce() {
+    if (this.transport.status().state === 'connected') await this.sayHello()
+  }
+
   private async sayHello() {
     this.helloSent = true
+    // Read fresh rather than caching at start(): a phone is very often enrolled
+    // *after* the agent is already running.
+    const enrolment = await loadJSON<{ childId?: string } | null>(KEYS.enrolment, null)
     await this.transport.send({
       t: 'hello',
       protocol: PROTOCOL_VERSION,
@@ -513,6 +529,7 @@ export class ChildAgent {
       name: this.identity.name,
       headSeq: this.state.headSeq,
       policyVersion: this.state.policy?.version ?? 0,
+      ...(enrolment?.childId ? { cloudChildId: enrolment.childId } : {}),
     })
   }
 

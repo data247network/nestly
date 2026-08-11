@@ -1,4 +1,5 @@
 import { hasCloud, supabase } from './client'
+import { KEYS } from '../platform/storage'
 import type { ChildEvent, Policy, Telemetry } from '../link/protocol'
 
 /**
@@ -126,8 +127,13 @@ export type Enrolment = {
   deviceSecret: string
 }
 
-/** Where an enrolled child device remembers what it was linked to. */
-export const ENROLMENT_KEY = 'nestly.enrolment'
+/**
+ * Where an enrolled child device remembers what it was linked to.
+ *
+ * Re-exported from the storage key registry so the child agent can read it
+ * without importing this module, and so there is still only one definition.
+ */
+export const ENROLMENT_KEY = KEYS.enrolment
 
 /**
  * Redeems an invite code on the child's phone.
@@ -274,44 +280,6 @@ export async function createInvite(householdId: string, childId: string): Promis
 }
 
 /* ------------------------------------------------------------------ push */
-
-/** Registers a paired child, or returns the existing row for this device. */
-export async function upsertChild(
-  householdId: string,
-  child: { peerId: string; name: string; avatar: string; deviceId?: string },
-): Promise<string | null> {
-  if (!hasCloud()) return null
-  const db = supabase()
-
-  const { data: found } = await db
-    .from('children')
-    .select('id')
-    .eq('household_id', householdId)
-    .eq('ble_address', child.peerId)
-    .maybeSingle()
-
-  if (found?.id) {
-    await db
-      .from('children')
-      .update({ name: child.name, avatar: child.avatar, device_id: child.deviceId ?? null })
-      .eq('id', found.id)
-    return found.id as string
-  }
-
-  const { data, error } = await db
-    .from('children')
-    .insert({
-      household_id: householdId,
-      name: child.name,
-      avatar: child.avatar,
-      ble_address: child.peerId,
-      device_id: child.deviceId ?? null,
-    })
-    .select('id')
-    .single()
-  if (error) throw error
-  return data.id as string
-}
 
 export async function pushPolicy(householdId: string, childId: string | null, policy: Policy) {
   if (!hasCloud()) return

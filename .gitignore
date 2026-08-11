@@ -25,3 +25,6 @@ android/capacitor-cordova-android-plugins/
 .env
 .env.*
 !.env.example
+
+# Built app. Produced by the build, not source.
+*.apk

@@ -256,7 +256,7 @@ function ProtectionSetup() {
  * what lets a parent see them while they are apart.
  */
 function CloudEnrolment() {
-  const { deviceId, name } = useDevice()
+  const { deviceId, name, announceEnrolment } = useDevice()
   const [enrolled, setEnrolled] = useState<Enrolment | null>(null)
   const [open, setOpen] = useState(false)
   const [code, setCode] = useState('')
@@ -285,6 +285,11 @@ function CloudEnrolment() {
       await saveJSON(ENROLMENT_KEY, result)
       setEnrolled(result)
       setOpen(false)
+      // Tell the parent who this phone now is. Saved first, because the agent
+      // reads the stored enrolment rather than taking it as an argument.
+      await announceEnrolment().catch(() => {
+        // Out of range. The next connection carries it anyway.
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'That code could not be used.')
     } finally {
