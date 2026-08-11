@@ -6,7 +6,6 @@
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
     {
-      "comment": "Android only offers to install a download it recognises as a package. Served with the wrong type it lands in Downloads as an inert file, which reads to a parent as a failed download.",
       "source": "/downloads/(.*).apk",
       "headers": [
         { "key": "Content-Type", "value": "application/vnd.android.package-archive" },
