@@ -9,6 +9,7 @@ import { WEB_SCREENS } from './app/nav'
 import { useStore } from './app/store'
 import { useDevice } from './platform/device'
 import { Showcase } from './showcase/Showcase'
+import { Portal, currentPortalRoute } from './portal/Portal'
 import { TabBar, showsTabBar } from './ui/TabBar'
 import { RoleGate } from './screens/setup'
 import { Onboarding } from './screens/onboarding'
@@ -37,17 +38,24 @@ export default function App() {
 
   if (!ready) return <Splash />
 
-  // The desktop showcase is a design review surface, not a device. It sits
-  // above the role gate so every screen stays reachable for a walkthrough.
+  // The public site comes first, and only off-device.
   //
-  // `?app=1` opts out of it. Without that, a desktop visitor to the deployed
-  // site only ever sees the gallery and has no way to reach the real sign-up —
-  // which made the whole thing look like a static brochure.
-  if (wide && !native && !forcedApp()) {
+  // A setup link is the first thing a child's phone ever opens, and a parent
+  // evaluating Nestly arrives with no account — neither can be served by the
+  // app's router, which starts after a role has been chosen. Inside the APK the
+  // path is always "/", so this must never run natively or the app would boot
+  // into its own marketing page.
+  const portal = native || forcedApp() ? null : currentPortalRoute()
+  if (portal) return <Portal route={portal} />
+
+  // The showcase is a design review surface, not a device — every screen
+  // reachable for a walkthrough. It used to be what a desktop visitor got by
+  // default, which is exactly why the deployed site read as a brochure.
+  if (wide && !native && showcaseRequested()) {
     return (
       <>
         <PolicyBridge />
-      <CloudBridge />
+        <CloudBridge />
         <Showcase />
       </>
     )
@@ -115,10 +123,19 @@ function Splash() {
   )
 }
 
-/** `?app=1` forces the live product on a desktop viewport. */
+/** `?app=1` forces the live product, skipping the public site. */
 function forcedApp(): boolean {
+  return flag('app')
+}
+
+/** `?showcase=1` opens the design gallery. */
+function showcaseRequested(): boolean {
+  return flag('showcase')
+}
+
+function flag(name: string): boolean {
   try {
-    return new URLSearchParams(globalThis.location?.search ?? '').get('app') === '1'
+    return new URLSearchParams(globalThis.location?.search ?? '').get(name) === '1'
   } catch {
     return false
   }

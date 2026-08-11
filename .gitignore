@@ -28,3 +28,6 @@ android/capacitor-cordova-android-plugins/
 
 # Built app. Produced by the build, not source.
 *.apk
+
+# ...except the copy the web portal serves.
+!public/downloads/*.apk

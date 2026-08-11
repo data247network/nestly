@@ -218,6 +218,18 @@ export function Household() {
 }
 
 /**
+ * Where a setup link points.
+ *
+ * Baked in at build time rather than read from `location.origin`, which inside
+ * the APK is `https://localhost` — a link no other phone can open. Overridable
+ * so a preview deployment can hand out links to itself.
+ */
+const SETUP_ORIGIN = (
+  (import.meta.env.VITE_PORTAL_ORIGIN as string | undefined) ??
+  'https://nestly-gamma-seven.vercel.app'
+).replace(/\/+$/, '')
+
+/**
  * The code handed to the child's phone.
  *
  * Grouped into two blocks of four because that is how people read a code aloud,
@@ -233,37 +245,56 @@ function InviteCard({
   name: string
   onDone: () => void
 }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'code' | 'link' | null>(null)
   const pretty = `${code.slice(0, 4)}-${code.slice(4)}`
+  // The link carries the code so the child's phone lands on a page that both
+  // installs the app and shows the code, rather than the parent having to
+  // explain two separate things over the phone.
+  const link = `${SETUP_ORIGIN}/setup/${code}`
 
-  const copy = async () => {
+  const copy = async (what: 'code' | 'link') => {
     try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      await navigator.clipboard.writeText(what === 'code' ? code : link)
+      setCopied(what)
+      setTimeout(() => setCopied(null), 2000)
     } catch {
-      /* clipboard blocked; the code is on screen to type anyway */
+      /* clipboard blocked; both are on screen to type anyway */
     }
+  }
+
+  const share = async () => {
+    const text = `Set up Nestly on your phone: ${link}`
+    // The share sheet is the point on a phone — it puts the link straight into
+    // whichever messaging app the family actually uses.
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      await navigator.share({ title: 'Set up Nestly', text }).catch(() => {})
+      return
+    }
+    await copy('link')
   }
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto px-[22px] py-[26px]">
       <ScreenTitle>Set up {name}'s phone</ScreenTitle>
 
-      <ol className="flex flex-col gap-2 text-[13px] text-slate2">
-        <li>1. Install Nestly on their phone.</li>
-        <li>
-          2. Choose <b>"This is my child's phone"</b>.
-        </li>
-        <li>3. Enter this code when asked.</li>
-      </ol>
+      <p className="text-[13px] leading-relaxed text-slate2">
+        Send {name} this link. It walks them through installing the app and
+        entering the code — they do not need an account of their own.
+      </p>
 
       <div className="rounded-2xl bg-tint py-6 text-center">
         <Display className="text-[34px] tracking-[0.12em] text-brand">{pretty}</Display>
         <div className="mt-2 text-[11.5px] text-tealInk">Expires in 24 hours · one phone only</div>
       </div>
 
-      <GhostButton onClick={() => void copy()}>{copied ? 'Copied' : 'Copy code'}</GhostButton>
+      <div className="break-all rounded-xl bg-cream px-3.5 py-2.5 text-[11.5px] text-body">
+        {link}
+      </div>
+
+      <PrimaryButton onClick={() => void share()}>Send setup link</PrimaryButton>
+      <GhostButton onClick={() => void copy('code')}>
+        {copied === 'code' ? 'Copied' : 'Copy code only'}
+      </GhostButton>
 
       <div className="rounded-2xl bg-cream px-4 py-3 text-[11.5px] leading-relaxed text-body">
         Only share this with the person setting up that phone. Anyone with the
