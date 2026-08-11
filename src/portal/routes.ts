@@ -19,6 +19,8 @@ export type PortalRoute =
   | { name: 'signup' }
   /** Family Hub on the web. Requires a session; redirects to sign-in without. */
   | { name: 'hub' }
+  /** Staff only. The route is public; the data behind it is not. */
+  | { name: 'admin' }
 
 /**
  * Codes are read off a phone screen and typed by a child, so the alphabet
@@ -37,6 +39,7 @@ export function matchPortal(pathname: string, search = ''): PortalRoute | null {
   if (path === '/signin' || path === '/login') return { name: 'signin' }
   if (path === '/signup' || path === '/join') return { name: 'signup' }
   if (path === '/hub' || path === '/family') return { name: 'hub' }
+  if (path === '/admin') return { name: 'admin' }
 
   // Both shapes work. `/setup/ABCD1234` is what a shared link looks like;
   // `/setup?code=` is what a QR scanner or an email client is liable to produce

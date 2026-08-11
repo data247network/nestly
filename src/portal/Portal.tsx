@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Display, Logo, Wordmark } from '../ui/kit'
 import { Hub } from './Hub'
-import { currentSession } from '../cloud/sync'
-import { hasCloud } from '../cloud/client'
+import { Admin } from './Admin'
+import { hasCloud, supabase } from '../cloud/client'
 import { matchPortal, normaliseCode, type PortalRoute } from './routes'
 
 /**
@@ -29,6 +29,13 @@ const VERSION = '1.0'
 export function Portal({ route }: { route: PortalRoute }) {
   if (route.name === 'setup') return <SetupLanding code={route.code} />
   if (route.name === 'download') return <Downloads />
+  if (route.name === 'admin') {
+    return (
+      <Shell>
+        <Admin />
+      </Shell>
+    )
+  }
   if (route.name === 'signin' || route.name === 'signup' || route.name === 'hub') {
     return (
       <Shell>
@@ -50,16 +57,24 @@ export function Portal({ route }: { route: PortalRoute }) {
  */
 function useSignedIn(): boolean | undefined {
   const [signedIn, setSignedIn] = useState<boolean | undefined>(undefined)
+
   useEffect(() => {
     if (!hasCloud()) return setSignedIn(false)
-    let live = true
-    void currentSession()
-      .then((s) => live && setSignedIn(s != null))
-      .catch(() => live && setSignedIn(false))
-    return () => {
-      live = false
-    }
+
+    // Subscribed, not sampled.
+    //
+    // A one-shot check at mount cannot see a sign-in that happens afterwards,
+    // and that is the normal case: the header renders on /signin while the
+    // visitor is still signed out, they submit the form, the hub swaps to the
+    // dashboard — and the header goes on offering "Sign in" until something
+    // forces a reload. Subscribing also covers signing out, and a session
+    // expiring mid-visit.
+    const { data } = supabase().auth.onAuthStateChange((_event, session) => {
+      setSignedIn(session != null)
+    })
+    return () => data.subscription.unsubscribe()
   }, [])
+
   return signedIn
 }
 
