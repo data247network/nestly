@@ -172,8 +172,41 @@ export class ChildAgent {
   }
 
   private emit(patch: Partial<AgentSnapshot>) {
+    const wasLocked = this.snapshot.locked
     this.snapshot = { ...this.snapshot, ...patch }
     for (const cb of this.subs) cb(this.snapshot)
+
+    // Drive the real lock from the same state the UI reads, so the overlay and
+    // the in-app screen can never disagree about whether the phone is locked.
+    if (this.snapshot.locked !== wasLocked) void this.applyLock()
+  }
+
+  /**
+   * Puts the enforced lock up or takes it down.
+   *
+   * The in-app lock screen only stopped a child who chose to keep looking at
+   * it; pressing Home gave the phone back. This draws over everything instead.
+   * Emergency numbers ride along on the overlay so the lock can never stand
+   * between a child and help.
+   */
+  private async applyLock() {
+    if (!Capacitor.isNativePlatform()) return
+    const scenario = this.snapshot.activeScenario
+    const contacts = this.snapshot.contacts.flatMap((c) =>
+      c.phone?.trim() ? [c.name ?? '', c.phone] : [],
+    )
+    try {
+      await NestlyLink.setLocked({
+        locked: this.snapshot.locked,
+        title: this.snapshot.locked ? 'Phone locked' : '',
+        subtitle: scenario ? `${scenario.name} is running.` : 'Locked by your parent.',
+        contacts,
+      })
+    } catch {
+      // Older build without the method, or permission revoked. The in-app lock
+      // screen still shows; enforcement is simply weaker, which the child's own
+      // setup screen already warns about.
+    }
   }
 
   /* ----------------------------------------------------------------- tick */

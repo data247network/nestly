@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useDevice } from '../platform/device'
 import { LinkBadge, ago } from './setup'
 import { FamilyHub } from './hub'
@@ -6,7 +6,7 @@ import { Capacitor } from '@capacitor/core'
 import { NestlyLink } from '../link/ble-peripheral'
 import { hasCloud } from '../cloud/client'
 import { ENROLMENT_KEY, redeemInvite, type Enrolment } from '../cloud/sync'
-import { loadJSON, saveJSON } from '../platform/storage'
+import { KEYS, loadJSON, saveJSON } from '../platform/storage'
 import { Display, FieldLabel, GhostButton, PrimaryButton } from '../ui/kit'
 
 /**
@@ -29,10 +29,38 @@ type ChildTab = (typeof TABS)[number]['id']
 export function ChildHome() {
   const { agent, name, notes, role } = useDevice()
   const [tab, setTab] = useState<ChildTab>('status')
+  /**
+   * When this device last looked at the notes.
+   *
+   * The badge used to count every note from the other side, forever — so it
+   * never cleared, and after a few messages it stopped meaning anything and
+   * started being ignored. Persisted rather than kept in state so it survives
+   * the app being closed, which is exactly when a child would expect a badge
+   * they have already dealt with to stay gone.
+   */
+  const [readAt, setReadAt] = useState<number | null>(null)
+
+  useEffect(() => {
+    void loadJSON<number>(KEYS.notesReadAt, 0).then(setReadAt)
+  }, [])
+
+  const markRead = useCallback(() => {
+    const now = Date.now()
+    setReadAt(now)
+    void saveJSON(KEYS.notesReadAt, now)
+  }, [])
+
+  // Opening the tab is what counts as reading them.
+  useEffect(() => {
+    if (tab === 'notes') markRead()
+  }, [tab, notes.length, markRead])
 
   if (agent?.locked) return <ChildLock />
 
-  const unread = notes.filter((n) => n.from !== role).length
+  // Null while the stored value is still loading: counting everything as unread
+  // for that instant would flash a badge on every launch.
+  const unread =
+    readAt === null ? 0 : notes.filter((n) => n.from !== role && n.ts > readAt).length
 
   // Notes get their own full-height layout — a composer inside a scrolling
   // panel fights the keyboard on a phone.
@@ -157,6 +185,18 @@ function ChildStatus() {
 function ProtectionSetup() {
   const { agent } = useDevice()
   const [busy, setBusy] = useState(false)
+  // Asked for separately because it is the one permission that decides whether
+  // a lock is real. Without it the lock is a screen the child leaves by
+  // pressing Home, which is exactly what it used to be.
+  const [canOverlay, setCanOverlay] = useState(true)
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    void NestlyLink.canOverlay()
+      .then((r) => setCanOverlay(r.allowed))
+      .catch(() => setCanOverlay(true))
+  })
+
   if (!agent) return null
 
   // Both permissions only exist on a real device; in the browser the prompts
@@ -166,7 +206,8 @@ function ProtectionSetup() {
   const needsVpn = !agent.filterConsented
   const needsUsage = !agent.usageAccess
   const needsContacts = !agent.contactsGranted
-  if (!needsVpn && !needsUsage && !needsContacts) return null
+  const needsOverlay = !canOverlay
+  if (!needsVpn && !needsUsage && !needsContacts && !needsOverlay) return null
 
   const grantVpn = async () => {
     setBusy(true)
@@ -196,6 +237,22 @@ function ProtectionSetup() {
       <p className="mt-1 text-[12px] leading-snug text-[#8A5A16]">
         A couple of things need your permission before Nestly can do its job.
       </p>
+
+      {needsOverlay ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            void NestlyLink.requestOverlayPermission()
+              .catch(() => {})
+              .finally(() => setBusy(false))
+          }}
+          className="mt-3 w-full rounded-xl bg-[#8A5A16] px-4 py-3 text-[13px] font-bold text-white disabled:opacity-50"
+        >
+          Allow the lock to work
+        </button>
+      ) : null}
 
       {needsVpn ? (
         <button

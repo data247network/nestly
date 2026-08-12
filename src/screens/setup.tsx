@@ -529,11 +529,42 @@ export function LinkBadge() {
   )
 }
 
+/**
+ * When something happened, always unambiguously.
+ *
+ * "2d ago" is fine for a glance and useless for a question a parent actually
+ * asks — *which* day did she leave school early. Anything older than an hour
+ * therefore carries a clock time, and anything not from today carries a date
+ * as well. Recent items stay relative because "3m ago" reads faster than a
+ * timestamp when you are checking whether it is happening now.
+ */
 export function ago(ts: number): string {
+  const then = new Date(ts)
   const mins = Math.floor((Date.now() - ts) / 60_000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.floor(hours / 24)}d ago`
+
+  const time = then.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const now = new Date()
+  const sameDay =
+    then.getDate() === now.getDate() &&
+    then.getMonth() === now.getMonth() &&
+    then.getFullYear() === now.getFullYear()
+  if (sameDay) return `today ${time}`
+
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  const wasYesterday =
+    then.getDate() === yesterday.getDate() &&
+    then.getMonth() === yesterday.getMonth() &&
+    then.getFullYear() === yesterday.getFullYear()
+  if (wasYesterday) return `yesterday ${time}`
+
+  const date = then.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    // Only show the year when it is not this one; it is noise the rest of the time.
+    ...(then.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  })
+  return `${date}, ${time}`
 }

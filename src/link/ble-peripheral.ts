@@ -72,6 +72,23 @@ export type NestlyLinkPlugin = {
   drainNewContacts(): Promise<{ granted: boolean; added: string[] }>
   requestContactsPermission(): Promise<{ granted: boolean }>
 
+  /** Whether "display over other apps" has been granted — the enforced lock needs it. */
+  canOverlay(): Promise<{ allowed: boolean }>
+  requestOverlayPermission(): Promise<void>
+  /**
+   * Puts the lock over every other app, or takes it away.
+   *
+   * `contacts` is a flat name/number list. They appear on the lock itself: a
+   * lock that could stop a child calling for help would be a hazard wearing the
+   * costume of a safety feature.
+   */
+  setLocked(opts: {
+    locked: boolean
+    title?: string
+    subtitle?: string
+    contacts?: string[]
+  }): Promise<void>
+
   /** Per-app screen time. Needs the Usage Access special permission. */
   hasUsageAccess(): Promise<{ granted: boolean }>
   openUsageSettings(): Promise<void>

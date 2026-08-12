@@ -113,6 +113,15 @@ export const KEYS = {
    * path for the sake of one string.
    */
   enrolment: 'nestly.enrolment',
+  /**
+   * When this device last opened the notes tab.
+   *
+   * The unread badge counted every note from the other side for all time, so it
+   * never cleared and stopped meaning anything. Stored rather than held in
+   * memory because a badge you have already dealt with reappearing after a
+   * relaunch is exactly as annoying as one that never clears.
+   */
+  notesReadAt: 'nestly.notes.readAt',
 } as const
 
 /** Per-child key suffixes, so each paired device keeps its own cursor. */

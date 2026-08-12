@@ -1000,6 +1000,59 @@ public class NestlyLinkPlugin extends Plugin {
         super.handleOnDestroy();
     }
 
+    /* ------------------------------------------------------------ lock */
+
+    @PluginMethod
+    public void canOverlay(PluginCall call) {
+        JSObject out = new JSObject();
+        out.put("allowed", NestlyLockOverlay.canDraw(getContext()));
+        call.resolve(out);
+    }
+
+    @PluginMethod
+    public void requestOverlayPermission(PluginCall call) {
+        getContext().startActivity(NestlyLockOverlay.permissionIntent(getContext()));
+        call.resolve();
+    }
+
+    /**
+     * Shows or hides the enforced lock.
+     *
+     * Contacts arrive as a flat name/number list so the emergency numbers stay
+     * reachable from the overlay itself — a lock that could stop a child calling
+     * for help would be a hazard wearing the costume of a safety feature.
+     */
+    @PluginMethod
+    public void setLocked(PluginCall call) {
+        boolean locked = Boolean.TRUE.equals(call.getBoolean("locked", false));
+        if (!locked) {
+            getActivity().runOnUiThread(NestlyLockOverlay::hide);
+            call.resolve();
+            return;
+        }
+
+        String title = call.getString("title", "Phone locked");
+        String subtitle = call.getString("subtitle", "A routine is running.");
+        java.util.List<String> flat = new java.util.ArrayList<>();
+        JSArray arr = call.getArray("contacts");
+        if (arr != null) {
+            try {
+                for (Object o : arr.toList()) flat.add(String.valueOf(o));
+            } catch (Exception ignored) {
+                /* malformed list; show the lock without call buttons */
+            }
+        }
+        final java.util.List<String[]> contacts = NestlyLockOverlay.pairs(flat);
+
+        getActivity().runOnUiThread(() -> {
+            // Rebuilt rather than updated: the contact list or the routine name
+            // may have changed since it went up.
+            NestlyLockOverlay.hide();
+            NestlyLockOverlay.show(getContext(), title, subtitle, contacts);
+        });
+        call.resolve();
+    }
+
     private void emitState(String state, String detail) {
         JSObject ev = new JSObject();
         ev.put("state", state);
