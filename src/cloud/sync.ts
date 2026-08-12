@@ -15,7 +15,32 @@ import type { ChildEvent, Policy, Telemetry } from '../link/protocol'
  * preserve: adding an account must never be able to break the offline path.
  */
 
-export type CloudSession = { userId: string; email: string | null } | null
+export type CloudSession = {
+  userId: string
+  email: string | null
+  /** What to call this person. Null until they tell us. */
+  name: string | null
+} | null
+
+/**
+ * A usable first name, without inventing one.
+ *
+ * Falls back to the local part of the email, which is right far more often
+ * than it is wrong — most people's address starts with their name — but never
+ * to something guessed from nothing. An empty greeting beats greeting someone
+ * by the wrong name.
+ */
+export function greetingName(session: { name?: string | null; email?: string | null }): string | null {
+  const explicit = session.name?.trim()
+  if (explicit) return explicit.split(/\s+/)[0]
+
+  const local = session.email?.split('@')[0] ?? ''
+  // Strip the separators and digits people put in addresses, then take the
+  // first word: "eton.joseph" -> "Eton", "sarah_w99" -> "Sarah".
+  const first = local.split(/[._\-+0-9]+/).filter(Boolean)[0]
+  if (!first || first.length < 2) return null
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase()
+}
 
 /* -------------------------------------------------------------------- auth */
 
@@ -23,7 +48,13 @@ export async function currentSession(): Promise<CloudSession> {
   if (!hasCloud()) return null
   const { data } = await supabase().auth.getSession()
   const u = data.session?.user
-  return u ? { userId: u.id, email: u.email ?? null } : null
+  if (!u) return null
+  const meta = (u.user_metadata ?? {}) as { full_name?: string; name?: string }
+  return {
+    userId: u.id,
+    email: u.email ?? null,
+    name: meta.full_name ?? meta.name ?? null,
+  }
 }
 
 export async function signIn(email: string, password: string) {
@@ -783,4 +814,16 @@ export function subscribeToChildren(
   return () => {
     void db.removeChannel(channel)
   }
+}
+
+/**
+ * Sets what to call this parent.
+ *
+ * Stored in auth metadata rather than a table of our own: it belongs to the
+ * person, not to a household, and someone in two families should not have two
+ * names.
+ */
+export async function setDisplayName(name: string) {
+  const { error } = await supabase().auth.updateUser({ data: { full_name: name.trim() } })
+  if (error) throw new Error(error.message)
 }

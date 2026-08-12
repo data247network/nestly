@@ -110,18 +110,24 @@ export function Overview({
   data,
   stats,
   email,
+  name,
   onAddChild,
 }: {
   data: HouseholdSummary
   stats: DashboardStats | null
   email: string | null
+  name: string | null
   onAddChild: () => void
 }) {
   const linked = data.children.filter((c) => c.enrolledAt).length
 
   return (
     <>
-      <Display className="text-[26px]">Welcome back</Display>
+      {/* Named when we know it, plain when we do not. Greeting someone by a
+          guessed name is worse than not greeting them at all. */}
+      <Display className="text-[26px]">
+        {name ? `Welcome back, ${name}` : 'Welcome back'}
+      </Display>
       <p className="mt-1 text-[13.5px] text-body">
         Here's what's happening with your family.
       </p>

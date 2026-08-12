@@ -4,6 +4,8 @@ import {
   createChild,
   createInvite,
   currentSession,
+  greetingName,
+  setDisplayName,
   ensureHousehold,
   loadHousehold,
   removeChild,
@@ -47,6 +49,7 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
   const [data, setData] = useState<HouseholdSummary | null>(null)
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [email, setEmail] = useState<string | null>(null)
+  const [displayName, setName] = useState<string | null>(null)
   const [section, setSection] = useState<HubSection>('dashboard')
   const [error, setError] = useState<string | null>(null)
 
@@ -74,6 +77,7 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
     const session = await currentSession()
     if (!session) return setStage('anon')
     setEmail(session.email)
+    setName(greetingName(session))
     try {
       const id = await ensureHousehold()
       if (!id) return setStage('error')
@@ -180,6 +184,7 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
           data={data}
           stats={stats}
           email={email}
+          name={displayName}
           onAddChild={() => setSection('children')}
         />
       ) : section === 'children' ? (
@@ -740,10 +745,47 @@ function Settings({
 }) {
   const [name, setName] = useState(data.name)
   const [saved, setSaved] = useState(false)
+  const [yourName, setYourName] = useState('')
+  const [nameSaved, setNameSaved] = useState(false)
+
+  // Prefilled from what is already stored, not from the email guess — showing
+  // a guessed name in an editable field makes it look like the user typed it.
+  useEffect(() => {
+    void currentSession().then((s) => setYourName(s?.name ?? ''))
+  }, [])
 
   return (
     <>
       <Display className="text-[26px]">Settings</Display>
+
+      <div className="mt-6 max-w-md">
+        <label htmlFor="you" className="text-[11.5px] font-bold tracking-[0.05em] text-body">
+          YOUR NAME
+        </label>
+        <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
+          Used to greet you. Without it we guess from your email address, which
+          is often right and sometimes not.
+        </p>
+        <input
+          id="you"
+          value={yourName}
+          onChange={(e) => setYourName(e.target.value)}
+          placeholder="e.g. Joseph"
+          className="mt-2 w-full rounded-xl border border-line px-4 py-3 text-[14px] outline-none focus:border-brand"
+        />
+        <button
+          type="button"
+          onClick={() =>
+            void setDisplayName(yourName).then(() => {
+              setNameSaved(true)
+              setTimeout(() => setNameSaved(false), 2000)
+            })
+          }
+          className="mt-3 rounded-xl bg-brand px-4 py-2.5 text-[13.5px] font-bold text-white"
+        >
+          {nameSaved ? 'Saved' : 'Save name'}
+        </button>
+      </div>
       <div className="mt-6 max-w-md">
         <label htmlFor="hh" className="text-[11.5px] font-bold tracking-[0.05em] text-body">
           FAMILY NAME
