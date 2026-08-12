@@ -74,6 +74,21 @@ export type NestlyLinkPlugin = {
 
   /** Whether "display over other apps" has been granted — the enforced lock needs it. */
   canOverlay(): Promise<{ allowed: boolean }>
+  /** Uninstall resistance: active means Android refuses to remove the app. */
+  adminStatus(): Promise<{ active: boolean }>
+  requestAdmin(): Promise<void>
+  /**
+   * Everything protective, in one read, plus any record of admin being turned
+   * off since the last call. Draining it here means one deactivation is
+   * reported once rather than on every tick.
+   */
+  protectionStatus(): Promise<{
+    adminActive: boolean
+    adminDisabledAt: number
+    overlayAllowed: boolean
+    filterRunning: boolean
+    usageAccess: boolean
+  }>
   requestOverlayPermission(): Promise<void>
   /**
    * Puts the lock over every other app, or takes it away.

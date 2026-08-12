@@ -125,6 +125,19 @@ export class ChildAgent {
   private lastUsagePush = 0
   /** When the last routine cloud push happened, to pace the next one. */
   private lastCloudPush = 0
+  /**
+   * What protection looked like last tick.
+   *
+   * Undefined until the first read, and that distinction matters: treating
+   * "not yet known" as "was on" would raise a tamper alert for every protection
+   * that simply has not been granted yet, on every fresh install.
+   */
+  private lastProtection?: {
+    adminActive: boolean
+    overlayAllowed: boolean
+    filterRunning: boolean
+    usageAccess: boolean
+  }
 
   constructor(
     private transport: Transport,
@@ -239,6 +252,7 @@ export class ChildAgent {
       await this.recordOnce('battery-low', 'low', 30 * 60_000)
     }
 
+    await this.checkTampering()
     await this.persist()
     await this.push()
     await this.pushUsage()
@@ -503,6 +517,65 @@ export class ChildAgent {
     }
 
     this.emit({ reminders })
+  }
+
+  /* ------------------------------------------------------------- tamper */
+
+  /**
+   * Notices protection being switched off, and says so loudly.
+   *
+   * Android does not let an app prevent any of this. Settings is system UI, no
+   * app may put a prompt in front of it, and a device admin can always be
+   * deactivated. So prevention was never the design — being unable to do it
+   * quietly is. Each of these is recorded as an urgent event, which pushes to
+   * the cloud immediately rather than waiting for the next batch, because the
+   * next step after disabling protection is usually uninstalling the app.
+   *
+   * Only transitions are reported. Something that was never granted is not a
+   * tamper; it is a setup step, and the child's own screen already asks for it.
+   */
+  private async checkTampering() {
+    if (!Capacitor.isNativePlatform()) return
+
+    let now: {
+      adminActive: boolean
+      adminDisabledAt: number
+      overlayAllowed: boolean
+      filterRunning: boolean
+      usageAccess: boolean
+    }
+    try {
+      now = await NestlyLink.protectionStatus()
+    } catch {
+      return // older build without the method
+    }
+
+    // Reported by the receiver rather than inferred, so a deactivate-and-
+    // reactivate between ticks is still caught.
+    if (now.adminDisabledAt > 0) {
+      await this.record('tamper', 'uninstall protection')
+    }
+
+    const before = this.lastProtection
+    this.lastProtection = {
+      adminActive: now.adminActive,
+      overlayAllowed: now.overlayAllowed,
+      filterRunning: now.filterRunning,
+      usageAccess: now.usageAccess,
+    }
+    if (!before) return
+
+    if (before.overlayAllowed && !now.overlayAllowed) {
+      await this.record('tamper', 'lock permission')
+    }
+    if (before.usageAccess && !now.usageAccess) {
+      await this.record('tamper', 'screen time access')
+    }
+    // Filtering already has its own dedicated event, and raising both would
+    // show a parent the same fact twice under different names.
+    if (before.filterRunning && !now.filterRunning) {
+      await this.recordOnce('filter-off', 'vpn', 10 * 60_000)
+    }
   }
 
   /* ----------------------------------------------------------------- log */

@@ -83,6 +83,10 @@ export default function App() {
   if (role === 'child') {
     return (
       <div className="safe-top flex h-full flex-col bg-white">
+        {/* The child phone needs this at least as much as the parent's: it is
+            the one that enforces routines, and it was the only one that could
+            never be told an update existed. */}
+        <UpdateBanner />
         <Screen id="childHome" />
       </div>
     )

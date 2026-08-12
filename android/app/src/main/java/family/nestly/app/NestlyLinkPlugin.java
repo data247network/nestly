@@ -1000,6 +1000,46 @@ public class NestlyLinkPlugin extends Plugin {
         super.handleOnDestroy();
     }
 
+    /* ----------------------------------------------------------- tamper */
+
+    @PluginMethod
+    public void adminStatus(PluginCall call) {
+        JSObject out = new JSObject();
+        out.put("active", NestlyDeviceAdmin.isActive(getContext()));
+        call.resolve(out);
+    }
+
+    @PluginMethod
+    public void requestAdmin(PluginCall call) {
+        getContext().startActivity(NestlyDeviceAdmin.enableIntent(getContext()));
+        call.resolve();
+    }
+
+    /**
+     * Reports what protection is currently on, and drains any record of it
+     * being switched off.
+     *
+     * The agent compares this against what it saw last tick. Nothing here can
+     * stop a child revoking a permission — Settings is system UI and no app may
+     * gate it — so the whole design is that switching anything off is loud.
+     */
+    @PluginMethod
+    public void protectionStatus(PluginCall call) {
+        android.content.SharedPreferences prefs =
+                getContext().getSharedPreferences(NestlyDeviceAdmin.PREFS, android.content.Context.MODE_PRIVATE);
+        long adminOffAt = prefs.getLong(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT, 0L);
+        // Cleared on read so one deactivation is reported once, not on every tick.
+        if (adminOffAt > 0) prefs.edit().remove(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT).apply();
+
+        JSObject out = new JSObject();
+        out.put("adminActive", NestlyDeviceAdmin.isActive(getContext()));
+        out.put("adminDisabledAt", adminOffAt);
+        out.put("overlayAllowed", NestlyLockOverlay.canDraw(getContext()));
+        out.put("filterRunning", NestlyFilterService.isRunning());
+        out.put("usageAccess", usageAccessGranted());
+        call.resolve(out);
+    }
+
     /* ------------------------------------------------------------ lock */
 
     @PluginMethod

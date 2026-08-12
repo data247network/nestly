@@ -189,12 +189,16 @@ function ProtectionSetup() {
   // a lock is real. Without it the lock is a screen the child leaves by
   // pressing Home, which is exactly what it used to be.
   const [canOverlay, setCanOverlay] = useState(true)
+  const [adminOn, setAdminOn] = useState(true)
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
     void NestlyLink.canOverlay()
       .then((r) => setCanOverlay(r.allowed))
       .catch(() => setCanOverlay(true))
+    void NestlyLink.adminStatus()
+      .then((r) => setAdminOn(r.active))
+      .catch(() => setAdminOn(true))
   })
 
   if (!agent) return null
@@ -207,7 +211,8 @@ function ProtectionSetup() {
   const needsUsage = !agent.usageAccess
   const needsContacts = !agent.contactsGranted
   const needsOverlay = !canOverlay
-  if (!needsVpn && !needsUsage && !needsContacts && !needsOverlay) return null
+  const needsAdmin = !adminOn
+  if (!needsVpn && !needsUsage && !needsContacts && !needsOverlay && !needsAdmin) return null
 
   const grantVpn = async () => {
     setBusy(true)
@@ -237,6 +242,22 @@ function ProtectionSetup() {
       <p className="mt-1 text-[12px] leading-snug text-[#8A5A16]">
         A couple of things need your permission before Nestly can do its job.
       </p>
+
+      {needsAdmin ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true)
+            void NestlyLink.requestAdmin()
+              .catch(() => {})
+              .finally(() => setBusy(false))
+          }}
+          className="mt-3 w-full rounded-xl bg-[#8A5A16] px-4 py-3 text-[13px] font-bold text-white disabled:opacity-50"
+        >
+          Stop Nestly being removed by accident
+        </button>
+      ) : null}
 
       {needsOverlay ? (
         <button

@@ -45,6 +45,10 @@ const URGENT: ReadonlySet<string> = new Set([
   'filter-off',
   'contact-added',
   'site-blocked',
+  // Someone switching protection off is the single most important thing a
+  // parent can be told, and the only signal that survives the app being
+  // uninstalled a moment later.
+  'tamper',
 ])
 
 export function isUrgent(events: ChildEvent[]): boolean {

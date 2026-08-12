@@ -25,6 +25,24 @@
 
         </activity>
 
+        <!--
+          Uninstall resistance. While this is active Android refuses to
+          uninstall Nestly and sends the user to Settings to deactivate first,
+          which the app notices and reports.
+        -->
+        <receiver
+            android:name=".NestlyDeviceAdmin"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.DEVICE_ADMIN_DISABLED" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

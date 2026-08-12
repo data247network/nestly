@@ -53,6 +53,14 @@ export type ChildEventKind =
    * appeared, not to receive a copy of their child's address book.
    */
   | 'contact-added'
+  /**
+   * Protection was switched off on the child's phone. `ref` names which one.
+   *
+   * Android does not let an app prevent this — Settings is system UI and no
+   * app may gate it — so the design is that it cannot happen quietly. These are
+   * pushed immediately rather than batched.
+   */
+  | 'tamper'
 
 export type ChildEvent = {
   /** Monotonic per-child sequence number. Drives ack/replay. */

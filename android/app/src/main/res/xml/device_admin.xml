@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The narrowest possible device-admin policy.
+
+  Declared with no <uses-policies> children at all. Being an active admin is
+  what makes the app resist uninstall; it needs no power over the device to do
+  that. Asking for wipe-data, password rules or camera control would grant
+  Nestly authority over a child's phone that the product has no use for, and
+  would rightly frighten anyone who read the consent screen.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies />
+</device-admin>

@@ -863,6 +863,17 @@ function toAlert(e: IngestedEvent, who: string, childId: string): Alert | null {
         tone: 'coral',
         urgent: true,
       }
+    case 'tamper':
+      // The one alert that is always urgent. Protection being switched off is
+      // usually the step before the app is removed altogether, so this may be
+      // the last thing the phone ever manages to send.
+      return {
+        ...base,
+        kind: 'content',
+        title: `Protection turned off — ${e.ref ?? 'unknown'}`,
+        tone: 'coral',
+        urgent: true,
+      }
     case 'contact-added':
       // Not marked urgent. New contacts are overwhelmingly ordinary — a
       // classmate, a cousin — and flagging every one as an emergency is how a
