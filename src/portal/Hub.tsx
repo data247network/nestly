@@ -22,6 +22,7 @@ import {
 import { planOf } from '../app/plans'
 import { Display } from '../ui/kit'
 import { HubChrome, Overview, Card, ago, type HubSection } from './Dashboard'
+import { Billing, UpgradeHint } from './Billing'
 
 /**
  * Family Hub, on the web.
@@ -153,7 +154,7 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
       ) : section === 'alerts' ? (
         <Alerts householdId={householdId} />
       ) : section === 'billing' ? (
-        <Billing data={data} />
+        <Billing data={data} householdId={householdId} onChanged={refresh} />
       ) : section === 'settings' ? (
         <Settings data={data} householdId={householdId} onChanged={refresh} />
       ) : (
@@ -462,9 +463,11 @@ function Family({
           </div>
         </div>
       ) : atLimit ? (
-        <div className="mt-4 rounded-2xl bg-amberBg px-4 py-3.5 text-[12.5px] leading-relaxed text-[#8A5A16]">
-          Your {plan.name} plan covers {plan.children} children. Upgrade to add another.
-        </div>
+        <UpgradeHint
+          currentPlan={plan.name}
+          currentChildren={plan.children}
+          needChildren={data.children.length + 1}
+        />
       ) : (
         <button
           type="button"
@@ -685,26 +688,6 @@ function Alerts({ householdId }: { householdId: string }) {
           ))}
         </ul>
       )}
-    </>
-  )
-}
-
-/* ----------------------------------------------------------------- billing */
-
-function Billing({ data }: { data: HouseholdSummary }) {
-  const plan = planOf(data.plan as never)
-  return (
-    <>
-      <Display className="text-[26px]">Plan & billing</Display>
-      <p className="mt-1 text-[13.5px] text-body">
-        You are on the {plan.name} plan — up to {plan.children} children and{' '}
-        {plan.parents} {plan.parents === 1 ? 'adult' : 'adults'}.
-      </p>
-      <div className="mt-6 rounded-2xl bg-amberBg px-5 py-4 text-[12.5px] leading-relaxed text-[#8A5A16]">
-        Card and bank payments are not connected yet. Subscriptions will be
-        bought here on the web rather than inside the app, which is what keeps
-        the price the same on every phone.
-      </div>
     </>
   )
 }

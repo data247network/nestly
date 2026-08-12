@@ -506,3 +506,174 @@ export async function pushTelemetry(childId: string, t: Telemetry) {
       updated_at: new Date().toISOString(),
     })
 }
+
+/* ------------------------------------------------------------ plans -- */
+
+export type PlanRow = {
+  id: string
+  name: string
+  maxParents: number
+  maxChildren: number
+  priceMonthly: number
+  priceAnnual: number
+  currency: string
+  blurb: string
+  active: boolean
+}
+
+/**
+ * The plan catalogue, from the database.
+ *
+ * Prices and limits used to be compiled into the app, so changing either meant
+ * a release on every phone. Reading them means an admin can retire a tier or
+ * move a price without a deploy — and the upgrade screen shows what is actually
+ * being charged rather than what was true at build time.
+ */
+export async function loadPlans(): Promise<PlanRow[]> {
+  if (!hasCloud()) return []
+  const { data, error } = await supabase()
+    .from('plans')
+    .select('id, name, max_parents, max_children, price_monthly, price_annual, currency, blurb, active')
+    .order('sort')
+  if (error) throw error
+  return (data ?? []).map((p) => ({
+    id: p.id as string,
+    name: p.name as string,
+    maxParents: Number(p.max_parents),
+    maxChildren: Number(p.max_children),
+    priceMonthly: Number(p.price_monthly),
+    priceAnnual: Number(p.price_annual),
+    currency: (p.currency as string) ?? 'GBP',
+    blurb: (p.blurb as string) ?? '',
+    active: Boolean(p.active),
+  }))
+}
+
+export function formatPrice(amount: number, currency: string): string {
+  if (amount === 0) return 'Free'
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount)
+  } catch {
+    return `${currency} ${amount.toFixed(2)}`
+  }
+}
+
+/* ---------------------------------------------------------- adults -- */
+
+export type Adult = { userId: string; role: string; joinedAt: string; isSelf: boolean }
+
+/**
+ * The adults on this account.
+ *
+ * Emails are not included: they live in auth.users, which no ordinary client
+ * may read, and exposing every co-parent's address to anyone who joined the
+ * household is not worth a nicer list. Role and join date identify a row well
+ * enough for the one action available — removing it.
+ */
+export async function loadAdults(householdId: string): Promise<Adult[]> {
+  if (!hasCloud()) return []
+  const db = supabase()
+  const [{ data }, { data: session }] = await Promise.all([
+    db.from('household_members').select('user_id, role, joined_at').eq('household_id', householdId),
+    db.auth.getUser(),
+  ])
+  const me = session?.user?.id
+  return (data ?? []).map((m) => ({
+    userId: m.user_id as string,
+    role: (m.role as string) ?? 'member',
+    joinedAt: m.joined_at as string,
+    isSelf: m.user_id === me,
+  }))
+}
+
+const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+/** Mints a code a second adult can redeem to join this household. */
+export async function createAdultInvite(householdId: string): Promise<string> {
+  const db = supabase()
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const bytes = crypto.getRandomValues(new Uint8Array(8))
+    const code = Array.from(bytes, (b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('')
+    const { error } = await db
+      .from('household_invites')
+      .insert({ code, household_id: householdId })
+    if (!error) return code
+    if (error.code !== '23505') throw error
+  }
+  throw new Error('Could not create an invitation. Try again.')
+}
+
+/**
+ * Joins the household an invitation points at.
+ *
+ * Goes through a SECURITY DEFINER function because joining means writing to a
+ * household the caller is not yet in, which every policy correctly refuses.
+ * The capacity check lives there too — the only place it cannot be skipped.
+ */
+export async function redeemAdultInvite(code: string): Promise<string> {
+  const { data, error } = await supabase().rpc('redeem_household_invite', { p_code: code })
+  if (error) throw new Error(error.message)
+  return data as string
+}
+
+export async function removeAdult(householdId: string, userId: string) {
+  const { error } = await supabase()
+    .from('household_members')
+    .delete()
+    .eq('household_id', householdId)
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
+/* ------------------------------------------------------ plan admin -- */
+
+/** Creates or updates a plan. Refused server-side unless the caller is an owner. */
+export async function adminUpsertPlan(p: PlanRow & { sort?: number }) {
+  const { error } = await supabase().rpc('admin_upsert_plan', {
+    p_id: p.id,
+    p_name: p.name,
+    p_max_parents: p.maxParents,
+    p_max_children: p.maxChildren,
+    p_price_monthly: p.priceMonthly,
+    p_price_annual: p.priceAnnual,
+    p_currency: p.currency,
+    p_blurb: p.blurb,
+    p_active: p.active,
+    p_sort: p.sort ?? 0,
+  })
+  if (error) throw new Error(error.message)
+}
+
+export async function adminDeletePlan(id: string) {
+  const { error } = await supabase().rpc('admin_delete_plan', { p_id: id })
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * The cheapest active plan that would raise both limits past what is needed.
+ *
+ * Used to name a specific upgrade rather than saying "upgrade" and leaving the
+ * parent to work out which tier actually solves their problem.
+ */
+export function nextPlanFor(
+  plans: PlanRow[],
+  need: { children?: number; adults?: number },
+): PlanRow | null {
+  const wantChildren = need.children ?? 0
+  const wantAdults = need.adults ?? 0
+  return (
+    plans
+      .filter((p) => p.active)
+      .filter((p) => p.maxChildren >= wantChildren && p.maxParents >= wantAdults)
+      .sort((a, b) => a.priceMonthly - b.priceMonthly)[0] ?? null
+  )
+}
+
+/** Moves a household onto a plan. Validated against the catalogue, owner-only. */
+export async function adminSetHouseholdPlan(householdId: string, plan: string) {
+  const { error } = await supabase().rpc('admin_set_household_plan', {
+    p_household_id: householdId,
+    p_plan: plan,
+  })
+  if (error) throw new Error(error.message)
+}

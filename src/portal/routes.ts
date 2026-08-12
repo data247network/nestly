@@ -21,6 +21,8 @@ export type PortalRoute =
   | { name: 'hub' }
   /** Staff only. The route is public; the data behind it is not. */
   | { name: 'admin' }
+  /** A second adult accepting an invitation to an existing family. */
+  | { name: 'join'; code: string | null }
 
 /**
  * Codes are read off a phone screen and typed by a child, so the alphabet
@@ -37,9 +39,17 @@ export function matchPortal(pathname: string, search = ''): PortalRoute | null {
   if (path === '/' || path === '/home') return { name: 'landing' }
   if (path === '/download' || path === '/downloads') return { name: 'download' }
   if (path === '/signin' || path === '/login') return { name: 'signin' }
-  if (path === '/signup' || path === '/join') return { name: 'signup' }
+  // `/join` is no longer an alias for sign-up: it now means accepting an
+  // invitation to an existing family, which is a different thing entirely.
+  if (path === '/signup') return { name: 'signup' }
   if (path === '/hub' || path === '/family') return { name: 'hub' }
   if (path === '/admin') return { name: 'admin' }
+
+  const joining = /^\/join(?:\/([A-Za-z0-9-]+))?$/.exec(path)
+  if (joining) {
+    const code = normaliseCode(joining[1] ?? new URLSearchParams(search).get('code') ?? '')
+    return { name: 'join', code: code.length === 8 ? code : null }
+  }
 
   // Both shapes work. `/setup/ABCD1234` is what a shared link looks like;
   // `/setup?code=` is what a QR scanner or an email client is liable to produce

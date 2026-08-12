@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Display, Logo, Wordmark } from '../ui/kit'
 import { Hub } from './Hub'
 import { Admin } from './Admin'
+import { Join } from './Join'
 import { hasCloud, supabase } from '../cloud/client'
 import { matchPortal, normaliseCode, type PortalRoute } from './routes'
 
@@ -29,6 +30,13 @@ const VERSION = '1.0'
 export function Portal({ route }: { route: PortalRoute }) {
   if (route.name === 'setup') return <SetupLanding code={route.code} />
   if (route.name === 'download') return <Downloads />
+  if (route.name === 'join') {
+    return (
+      <Shell>
+        <Join code={route.code} />
+      </Shell>
+    )
+  }
   if (route.name === 'admin') {
     return (
       <Shell>

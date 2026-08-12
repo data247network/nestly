@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { hasCloud, supabase } from '../cloud/client'
-import { signOut } from '../cloud/sync'
+import { adminSetHouseholdPlan, loadPlans, signOut, type PlanRow } from '../cloud/sync'
 import { Display } from '../ui/kit'
 import { ago } from './Dashboard'
+import { PlanEditor } from './PlanEditor'
 
 /**
  * The business dashboard.
@@ -70,8 +71,6 @@ const NAV: { id: Section; label: string; icon: string }[] = [
   { id: 'families', label: 'Families', icon: '⌂' },
   { id: 'settings', label: 'Plans & billing', icon: '◈' },
 ]
-
-const PLANS = ['free', 'pro', 'premium', 'family']
 
 /** Every admin call goes through here, so the auth header is never forgotten. */
 async function callAdmin<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
@@ -203,7 +202,7 @@ export function Admin() {
         ) : section === 'families' ? (
           <Families />
         ) : (
-          <PlansAndBilling stats={stats} />
+          <PlanEditor />
         )}
       </div>
     </div>
@@ -473,6 +472,10 @@ function Parents() {
 
 function Families() {
   const [rows, setRows] = useState<Family[] | null>(null)
+  // Options come from the catalogue, not a literal. A hardcoded list drifts the
+  // moment a plan is created here, and offering an id that does not exist sets
+  // a household to a plan with no limits behind it.
+  const [plans, setPlans] = useState<PlanRow[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -488,13 +491,14 @@ function Families() {
 
   useEffect(() => {
     void load()
+    void loadPlans().then(setPlans).catch(() => setPlans([]))
   }, [load])
 
   const setPlan = async (f: Family, plan: string) => {
     setBusy(f.id)
     setError(null)
     try {
-      await callAdmin('setPlan', { householdId: f.id, plan })
+      await adminSetHouseholdPlan(f.id, plan)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not change the plan.')
@@ -558,9 +562,9 @@ function Families() {
                   onChange={(e) => void setPlan(f, e.target.value)}
                   className="ml-1 rounded-xl border border-line px-2.5 py-2 text-[12.5px] font-bold text-ink"
                 >
-                  {PLANS.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.maxChildren}c / {p.maxParents}a)
                     </option>
                   ))}
                 </select>
@@ -605,42 +609,6 @@ function Families() {
           </div>
         ))}
         {rows.length === 0 ? <Note>No families yet.</Note> : null}
-      </div>
-    </>
-  )
-}
-
-/* --------------------------------------------------------------- billing */
-
-function PlansAndBilling({ stats }: { stats: Stats | null }) {
-  return (
-    <>
-      <Display className="text-[26px]">Plans & billing</Display>
-      <p className="mt-1 text-[13px] text-body">
-        Plans are assigned per family under Families. Payment providers are not
-        connected yet.
-      </p>
-
-      <div className="mt-6 grid gap-5 lg:grid-cols-2">
-        <Panel title="Households by plan">
-          <Breakdown data={stats?.planMix ?? {}} empty="No households yet." />
-        </Panel>
-        <Panel title="Subscription records">
-          {stats && Object.keys(stats.subscriptionsByStatus).length > 0 ? (
-            <Breakdown data={stats.subscriptionsByStatus} empty="" />
-          ) : (
-            <p className="text-[12.5px] leading-relaxed text-body">
-              None yet. Once Stripe and OPay are connected, each purchase writes a
-              row here and the family's plan follows it automatically.
-            </p>
-          )}
-        </Panel>
-      </div>
-
-      <div className="mt-5 rounded-2xl bg-amberBg px-5 py-4 text-[12.5px] leading-relaxed text-[#8A5A16]">
-        Subscriptions will be sold on the web portal rather than inside the app.
-        That keeps the price identical on every phone and avoids the store's cut —
-        but it means the app must never link to checkout.
       </div>
     </>
   )
