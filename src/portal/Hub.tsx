@@ -14,6 +14,7 @@ import {
   loadStats,
   loadDevices,
   loadAlerts,
+  subscribeToChildren,
   type DashboardStats,
   type DeviceRow,
   type AlertRow,
@@ -87,6 +88,40 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
   useEffect(() => {
     void resolve()
   }, [resolve])
+
+  /**
+   * Live updates, rather than whatever was true when the page loaded.
+   *
+   * A parent watching a child walk home saw a frozen screen until they hit
+   * refresh. This re-reads when the child's own rows change — the pushes now
+   * come from the child's phone directly, so they arrive whether or not anyone
+   * is near it.
+   *
+   * Debounced: a burst of events on arrival would otherwise fire one reload per
+   * row.
+   */
+  // Keyed on the child ids, not on `data`. The callback reloads `data`, so
+  // depending on the object itself would tear down and rebuild the socket on
+  // every single update it delivered.
+  const childKey = (data?.children ?? [])
+    .map((c) => c.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!householdId || !childKey) return
+    const ids = childKey.split(',')
+
+    let pending: ReturnType<typeof setTimeout> | undefined
+    const stop = subscribeToChildren(ids, () => {
+      clearTimeout(pending)
+      pending = setTimeout(() => void load(householdId), 800)
+    })
+    return () => {
+      clearTimeout(pending)
+      stop()
+    }
+  }, [householdId, childKey, load])
 
   if (stage === 'checking') return <Centered>Loading your family…</Centered>
 

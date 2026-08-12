@@ -747,3 +747,40 @@ export async function adminSetPlanPrice(
   })
   if (error) throw new Error(error.message)
 }
+
+/* --------------------------------------------------------- realtime -- */
+
+/**
+ * Live updates for a household.
+ *
+ * Without this the web portal only ever showed what was true when the page
+ * loaded — a parent watching a child walk home saw nothing move until they
+ * refreshed. Postgres changes are pushed down the socket instead.
+ *
+ * Scoped to this household's children by filter, so a socket does not carry
+ * other families' rows to a browser that has no business receiving them. RLS
+ * still applies on top; the filter is about not shipping the data at all.
+ */
+export function subscribeToChildren(
+  childIds: string[],
+  onChange: (table: 'child_telemetry' | 'child_events' | 'child_usage') => void,
+): () => void {
+  if (!hasCloud() || childIds.length === 0) return () => {}
+
+  const db = supabase()
+  const inList = `in.(${childIds.join(',')})`
+  const channel = db.channel(`household-${childIds[0]}`)
+
+  for (const table of ['child_telemetry', 'child_events', 'child_usage'] as const) {
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table, filter: `child_id=${inList}` },
+      () => onChange(table),
+    )
+  }
+
+  channel.subscribe()
+  return () => {
+    void db.removeChannel(channel)
+  }
+}

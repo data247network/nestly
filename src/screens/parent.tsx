@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Geolocation } from '@capacitor/geolocation'
 import { describeSchedule, fmtDuration, useStore } from '../app/store'
 import { useDevice } from '../platform/device'
+import { useCloudChildren } from '../app/CloudWatch'
 import { Scene } from '../art/Scene'
 import { LinkBadge, ago } from './setup'
 import { RecentActivity, Segments } from './activity'
@@ -32,21 +33,45 @@ import {
 export function Home() {
   const { state, go, dispatch } = useStore()
   const { pairing, child: live } = useDevice()
+  // Remote view. Bluetooth stays authoritative when the phones are together —
+  // it is fresher and needs no signal — so this only fills the gap when they
+  // are apart, which is exactly when a parent most wants to look.
+  const { household: remote, updatedAt: remoteAt } = useCloudChildren()
   const recent = state.alerts.slice(0, 2)
   const noContacts = state.emergencyContacts.every((c) => !c.phone.trim())
 
   // Nothing to show until a child device exists. Sending the parent straight
-  // to pairing beats a dashboard of zeroes.
+  // to pairing beats a dashboard of zeroes — unless a child has already been
+  // enrolled from the web, in which case they are set up and simply not in
+  // Bluetooth range, and telling them to go and pair would be wrong.
+  const enrolledRemotely = (remote?.children ?? []).some((c) => c.enrolledAt)
+
   if (!pairing) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-5 px-[26px] text-center">
         <Scene name="safe" className="w-[168px]" />
-        <Display className="text-[21px] leading-tight">Connect your child's phone</Display>
-        <p className="text-[13px] leading-relaxed text-body">
-          Install Nestly on their phone, choose "This is my child's phone", then
-          pair the two over Bluetooth. It takes about a minute.
-        </p>
-        <PrimaryButton onClick={() => go('pair')}>Pair a device</PrimaryButton>
+        {enrolledRemotely ? (
+          <>
+            <Display className="text-[21px] leading-tight">
+              {remote?.children.find((c) => c.enrolledAt)?.name ?? 'Your child'} is set up
+            </Display>
+            <p className="text-[13px] leading-relaxed text-body">
+              Their phone is linked to your account and reporting over the
+              internet{remoteAt ? `, last seen ${ago(remoteAt)}` : ''}. Pair over
+              Bluetooth as well and it keeps working with no signal at all.
+            </p>
+            <PrimaryButton onClick={() => go('pair')}>Also pair over Bluetooth</PrimaryButton>
+          </>
+        ) : (
+          <>
+            <Display className="text-[21px] leading-tight">Connect your child's phone</Display>
+            <p className="text-[13px] leading-relaxed text-body">
+              Install Nestly on their phone, choose "This is my child's phone", then
+              pair the two over Bluetooth. It takes about a minute.
+            </p>
+            <PrimaryButton onClick={() => go('pair')}>Pair a device</PrimaryButton>
+          </>
+        )}
       </div>
     )
   }

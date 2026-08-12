@@ -17,6 +17,7 @@ import {
 } from '../link/protocol'
 import type { Transport } from '../link/transport'
 import { KEYS, loadJSON, saveJSON } from '../platform/storage'
+import { isUrgent, pushInterval, uplink } from './cloudUplink'
 
 /**
  * The child device's agent.
@@ -122,6 +123,8 @@ export class ChildAgent {
   /** Latest native visit tally; replaced wholesale each tick. */
   private visits: NativeVisit[] = []
   private lastUsagePush = 0
+  /** When the last routine cloud push happened, to pace the next one. */
+  private lastCloudPush = 0
 
   constructor(
     private transport: Transport,
@@ -206,6 +209,8 @@ export class ChildAgent {
     await this.persist()
     await this.push()
     await this.pushUsage()
+    // Independent of Bluetooth: this is what reaches a parent who is miles away.
+    await this.pushCloud()
   }
 
   /* --------------------------------------------------------------- filter */
@@ -485,6 +490,11 @@ export class ChildAgent {
     if (this.state.log.length > MAX_LOG) this.state.log.splice(0, this.state.log.length - MAX_LOG)
     this.emit({ pendingEvents: this.state.log.length })
     await this.persist()
+
+    // A zone exit or the filter being switched off is the reason a parent
+    // installed this. Waiting up to a minute to mention it is a minute they
+    // did not know, so these jump the queue.
+    if (isUrgent([event])) void this.pushCloud(true)
   }
 
   private lastRecorded = new Map<string, number>()
@@ -534,6 +544,43 @@ export class ChildAgent {
   }
 
   /** Sends current telemetry and any unacked events, when a parent is listening. */
+  /**
+   * Sends to the cloud, on its own cadence.
+   *
+   * Deliberately separate from the Bluetooth push and never gated on it: the
+   * whole point is to reach a parent who is nowhere near this phone. Failure is
+   * ignored — being offline is the expected state, and the log is only trimmed
+   * once the *parent* acknowledges over Bluetooth, so nothing is lost by an
+   * upload that does not land.
+   */
+  private async pushCloud(force = false) {
+    const now = Date.now()
+    if (!force && now - this.lastCloudPush < pushInterval(this.snapshot.battery)) return
+    this.lastCloudPush = now
+
+    const res = await uplink({
+      telemetry: {
+        t: 'telemetry',
+        ts: now,
+        battery: this.snapshot.battery,
+        charging: this.snapshot.charging,
+        fix: this.snapshot.lastFix,
+        activeScenarioId: this.snapshot.activeScenario?.id ?? null,
+        locked: this.snapshot.locked,
+      },
+      events: this.state.log.slice(0, 40),
+    })
+
+    // A rule changed while this phone was out of Bluetooth range for days. The
+    // same version guard the radio path uses applies: only move forwards.
+    if (res.ok && res.policy && (res.policyVersion ?? 0) > (this.state.policy?.version ?? 0)) {
+      // Fed through the same handler the radio uses, so the version guard,
+      // scenario re-evaluation, persistence and filter restart all happen
+      // exactly once, in one place.
+      await this.onMessage(res.policy as Policy)
+    }
+  }
+
   private async push() {
     if (this.transport.status().state !== 'connected') return
 
