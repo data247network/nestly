@@ -31,3 +31,9 @@ android/capacitor-cordova-android-plugins/
 
 # ...except the copy the web portal serves.
 !public/downloads/*.apk
+
+# Firebase service account keys. These are private keys that never expire and
+# grant server-side access to the whole Firebase project — they belong in a
+# secret store, never in a repository.
+*firebase-adminsdk*.json
+serviceAccountKey*.json

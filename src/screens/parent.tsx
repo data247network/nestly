@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Geolocation } from '@capacitor/geolocation'
 import { describeSchedule, fmtDuration, useStore } from '../app/store'
 import { useDevice } from '../platform/device'
@@ -8,6 +8,8 @@ import { LinkBadge, ago } from './setup'
 import { RecentActivity, Segments } from './activity'
 import { Reminders } from './reminders'
 import type { Tone } from '../app/types'
+import type { Fix } from '../link/protocol'
+import { describePlace, type Place } from '../platform/places'
 import {
   Avatar,
   BackButton,
@@ -242,10 +244,7 @@ export function MapZones() {
       <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-5 py-[18px]">
         <div className="rounded-xl bg-cream px-3.5 py-2.5 text-[12px] leading-snug text-body">
           {fix ? (
-            <>
-              Last known position {ago(fix.ts)} — {fix.lat.toFixed(5)}, {fix.lng.toFixed(5)}{' '}
-              (±{Math.round(fix.acc)}m).
-            </>
+            <PositionLine fix={fix} />
           ) : (
             <>
               No position yet. {who}'s phone sends its location when the two
@@ -1028,5 +1027,54 @@ export function SafetyTips() {
         </article>
       ))}
     </div>
+  )
+}
+
+/**
+ * Where the child is, in words.
+ *
+ * Coordinates alone are precise and unreadable — a parent asking "where is
+ * she?" cannot answer it from 5.56598, 5.80290. The nearby landmark and street
+ * are resolved when this renders and cached, so a phone sitting still does not
+ * re-look-up the same corner every minute.
+ *
+ * The coordinates stay on screen regardless. If the lookup fails, is rate
+ * limited, or the phone is offline, nothing is lost — the precise answer is
+ * still there, and that is the part that matters in an emergency.
+ */
+function PositionLine({ fix }: { fix: Fix }) {
+  const [place, setPlace] = useState<Place | null>(null)
+  const [looking, setLooking] = useState(true)
+
+  useEffect(() => {
+    let live = true
+    setLooking(true)
+    void describePlace(fix.lat, fix.lng)
+      .then((p) => live && setPlace(p))
+      .finally(() => {
+        if (live) setLooking(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [fix.lat, fix.lng])
+
+  return (
+    <>
+      {place ? (
+        <>
+          <b className="text-ink">Near {place.label}</b>
+          {place.detail ? <> · {place.detail}</> : null}
+          <br />
+        </>
+      ) : looking ? (
+        <>
+          Looking up the area…
+          <br />
+        </>
+      ) : null}
+      Last known position {ago(fix.ts)} — {fix.lat.toFixed(5)}, {fix.lng.toFixed(5)} (±
+      {Math.round(fix.acc)}m).
+    </>
   )
 }

@@ -163,6 +163,16 @@ function describe(e: IngestedEvent): { tone: string; label: string } {
       return { tone: 'bg-amber', label: 'Battery ran low' }
     case 'agent-start':
       return { tone: 'bg-muted', label: 'Nestly started on their phone' }
+    case 'site-blocked':
+      return { tone: 'bg-coral', label: `Blocked ${e.ref ?? 'a site'}` }
+    case 'site-warned':
+      return { tone: 'bg-amber', label: `Warned about ${e.ref ?? 'a site'}` }
+    case 'filter-off':
+      return { tone: 'bg-coral', label: 'Web filtering was turned off' }
+    case 'reminder-shown':
+      return { tone: 'bg-violet', label: `Reminder — ${e.ref ?? 'shown'}` }
+    case 'contact-added':
+      return { tone: 'bg-amber', label: `New contact — ${e.ref ?? 'unnamed'}` }
     case 'tamper':
       return { tone: 'bg-coral', label: `Protection turned off — ${e.ref ?? 'unknown'}` }
     default:
