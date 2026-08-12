@@ -90,7 +90,26 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
   if (stage === 'checking') return <Centered>Loading your family…</Centered>
 
   if (stage === 'anon') {
-    return <Auth mode={intent === 'signup' ? 'signup' : 'signin'} onDone={() => void resolve()} />
+    return (
+      <Auth
+        mode={intent === 'signup' ? 'signup' : 'signin'}
+        onDone={() => {
+          // Return the visitor to whatever sent them here. Signing in is never
+          // the thing someone wanted to do — it is the toll on the way
+          // somewhere, and dropping them at the default destination reads as a
+          // failure even though it worked.
+          const next = new URLSearchParams(window.location.search).get('next')
+          // Only same-origin paths. An absolute URL here would turn the sign-in
+          // page into an open redirect, which is a credible phishing lever
+          // precisely because the link genuinely starts on our domain.
+          if (next && /^\/[A-Za-z0-9/_-]*$/.test(next)) {
+            window.location.assign(next)
+            return
+          }
+          void resolve()
+        }}
+      />
+    )
   }
 
   if (stage === 'error' || !data || !householdId) {

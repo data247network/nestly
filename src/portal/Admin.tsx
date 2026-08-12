@@ -78,7 +78,10 @@ export function Admin() {
     return (
       <Note>
         Sign in first.{' '}
-        <a className="font-bold text-brand" href="/signin">
+        {/* Carries where to come back to. Without it, signing in lands on the
+            parent dashboard and the admin has to find their way here again,
+            which reads as the sign-in having failed. */}
+        <a className="font-bold text-brand" href="/signin?next=/admin">
           Go to sign in
         </a>
       </Note>

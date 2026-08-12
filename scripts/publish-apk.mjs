@@ -19,7 +19,17 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const APK_SRC = join(root, 'android/app/build/outputs/apk/debug/app-debug.apk')
+/**
+ * Release, not debug — and this is not a preference.
+ *
+ * Every machine has its own debug keystore, so a debug APK cannot update a
+ * release-signed install: Android refuses it outright with
+ * INSTALL_FAILED_UPDATE_INCOMPATIBLE. Publishing debug builds would therefore
+ * hand every existing phone an update it is guaranteed to reject, and Play
+ * Protect blocks debug-signed sideloads on top of that.
+ */
+const APK_RELEASE = join(root, 'android/app/build/outputs/apk/release/app-release.apk')
+const APK_DEBUG = join(root, 'android/app/build/outputs/apk/debug/app-debug.apk')
 const OUT_DIR = join(root, 'public/downloads')
 const APK_OUT = join(OUT_DIR, 'nestly.apk')
 const MANIFEST_OUT = join(OUT_DIR, 'latest.json')
@@ -28,10 +38,21 @@ const PORTAL =
   process.env.VITE_PORTAL_ORIGIN?.replace(/\/+$/, '') ??
   'https://nestly-gamma-seven.vercel.app'
 
-if (!existsSync(APK_SRC)) {
-  console.error(`No APK at ${APK_SRC}\nBuild one first: npm run android:apk`)
+if (!existsSync(APK_RELEASE)) {
+  if (existsSync(APK_DEBUG)) {
+    console.error(
+      'Refusing to publish a debug build.\n' +
+        'A debug APK cannot update a release-signed phone — Android rejects it with\n' +
+        'INSTALL_FAILED_UPDATE_INCOMPATIBLE — and Play Protect blocks debug sideloads.\n' +
+        'Build a signed one: npm run android:apk:release',
+    )
+  } else {
+    console.error(`No release APK at ${APK_RELEASE}\nBuild one: npm run android:apk:release`)
+  }
   process.exit(1)
 }
+
+const APK_SRC = APK_RELEASE
 
 // Read the version out of build.gradle rather than accepting an argument. A
 // manifest whose versionCode does not match the compiled one is worse than no
