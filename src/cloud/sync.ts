@@ -677,3 +677,73 @@ export async function adminSetHouseholdPlan(householdId: string, plan: string) {
   })
   if (error) throw new Error(error.message)
 }
+
+/* --------------------------------------------------------- payments -- */
+
+export type CurrencyPrice = { currency: string; monthly: number; annual: number }
+
+/** Every currency a plan is priced in, so checkout can offer the right one. */
+export async function loadPlanPrices(): Promise<Record<string, CurrencyPrice[]>> {
+  if (!hasCloud()) return {}
+  const { data } = await supabase()
+    .from('plan_prices')
+    .select('plan_id, currency, price_monthly, price_annual')
+  const out: Record<string, CurrencyPrice[]> = {}
+  for (const r of data ?? []) {
+    const id = r.plan_id as string
+    ;(out[id] ??= []).push({
+      currency: r.currency as string,
+      monthly: Number(r.price_monthly),
+      annual: Number(r.price_annual),
+    })
+  }
+  return out
+}
+
+/**
+ * Starts a checkout and returns where to send the customer.
+ *
+ * The amount is deliberately not a parameter. It is looked up server-side from
+ * the plan — a client that could name its own price would buy Premium for a
+ * penny.
+ */
+export async function startCheckout(
+  provider: 'opay',
+  householdId: string,
+  planId: string,
+  period: 'monthly' | 'annual',
+): Promise<string> {
+  const { data: session } = await supabase().auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sign in first.')
+
+  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${provider}-checkout`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ householdId, planId, period }),
+  })
+  const body = (await res.json().catch(() => ({}))) as { checkoutUrl?: string; error?: string }
+  if (!res.ok || !body.checkoutUrl) {
+    throw new Error(body.error ?? 'Could not start checkout.')
+  }
+  return body.checkoutUrl
+}
+
+export async function adminSetPlanPrice(
+  planId: string,
+  currency: string,
+  monthly: number,
+  annual: number,
+) {
+  const { error } = await supabase().rpc('admin_set_plan_price', {
+    p_plan_id: planId,
+    p_currency: currency,
+    p_monthly: monthly,
+    p_annual: annual,
+  })
+  if (error) throw new Error(error.message)
+}

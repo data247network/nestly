@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   adminDeletePlan,
+  adminSetPlanPrice,
   adminUpsertPlan,
   formatPrice,
+  loadPlanPrices,
   loadPlans,
+  type CurrencyPrice,
   type PlanRow,
 } from '../cloud/sync'
 import { Display } from '../ui/kit'
@@ -37,6 +40,10 @@ const BLANK: Draft = {
 
 export function PlanEditor() {
   const [plans, setPlans] = useState<PlanRow[] | null>(null)
+  const [prices, setPrices] = useState<Record<string, CurrencyPrice[]>>({})
+  const [pricing, setPricing] = useState<{ planId: string; monthly: string; annual: string } | null>(
+    null,
+  )
   const [draft, setDraft] = useState<Draft | null>(null)
   const [creating, setCreating] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -46,6 +53,7 @@ export function PlanEditor() {
   const load = useCallback(async () => {
     try {
       setPlans(await loadPlans())
+      setPrices(await loadPlanPrices())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load plans.')
       setPlans([])
@@ -124,6 +132,14 @@ export function PlanEditor() {
                   {formatPrice(p.priceMonthly, p.currency)}/mo ·{' '}
                   {formatPrice(p.priceAnnual, p.currency)}/yr · {p.maxChildren} children ·{' '}
                   {p.maxParents} {p.maxParents === 1 ? 'adult' : 'adults'}
+                  {(() => {
+                    const ngn = (prices[p.id] ?? []).find((x) => x.currency === 'NGN')
+                    return ngn && ngn.monthly > 0 ? (
+                      <> · ₦{ngn.monthly.toLocaleString()}/mo</>
+                    ) : (
+                      <span className="text-coralInk"> · no naira price</span>
+                    )
+                  })()}
                 </div>
               </div>
               <button
@@ -138,12 +154,94 @@ export function PlanEditor() {
               </button>
               <button
                 type="button"
+                onClick={() => {
+                  const ngn = (prices[p.id] ?? []).find((x) => x.currency === 'NGN')
+                  setPricing({
+                    planId: p.id,
+                    monthly: String(ngn?.monthly ?? 0),
+                    annual: String(ngn?.annual ?? 0),
+                  })
+                }}
+                className="rounded-xl bg-tint px-3 py-2 text-[12px] font-bold text-brand"
+              >
+                Naira price
+              </button>
+              <button
+                type="button"
                 onClick={() => setConfirming(p.id)}
                 className="rounded-xl px-3 py-2 text-[12px] font-bold text-coralInk"
               >
                 Delete
               </button>
             </div>
+
+            {pricing?.planId === p.id ? (
+              <div className="mt-3 rounded-xl bg-cream px-3.5 py-3">
+                <div className="text-[12px] font-bold text-body">
+                  Naira price — what OPay charges Nigerian customers
+                </div>
+                <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
+                  Set independently of the {p.currency} price. Converting at checkout would drift
+                  with the exchange rate and never match the receipt. Leave at 0 and this plan
+                  cannot be bought with OPay.
+                </p>
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  <label className="text-[11.5px] font-bold text-body">
+                    Monthly ₦
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={pricing.monthly}
+                      onChange={(e) => setPricing({ ...pricing, monthly: e.target.value })}
+                      className="ml-1 w-28 rounded-xl border border-line px-2.5 py-1.5 text-[12.5px]"
+                    />
+                  </label>
+                  <label className="text-[11.5px] font-bold text-body">
+                    Yearly ₦
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={pricing.annual}
+                      onChange={(e) => setPricing({ ...pricing, annual: e.target.value })}
+                      className="ml-1 w-28 rounded-xl border border-line px-2.5 py-1.5 text-[12.5px]"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true)
+                      void adminSetPlanPrice(
+                        p.id,
+                        'NGN',
+                        Number(pricing.monthly),
+                        Number(pricing.annual),
+                      )
+                        .then(() => {
+                          setPricing(null)
+                          return load()
+                        })
+                        .catch((err) =>
+                          setError(err instanceof Error ? err.message : 'Could not save.'),
+                        )
+                        .finally(() => setBusy(false))
+                    }}
+                    className="rounded-xl bg-brand px-3.5 py-2 text-[12px] font-bold text-white disabled:opacity-50"
+                  >
+                    Save naira price
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPricing(null)}
+                    className="rounded-xl px-3 py-2 text-[12px] font-bold text-body"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {confirming === p.id ? (
               <div className="mt-3 rounded-xl bg-coralBg px-3.5 py-3">

@@ -3,9 +3,12 @@ import {
   createAdultInvite,
   formatPrice,
   loadAdults,
+  loadPlanPrices,
   loadPlans,
   nextPlanFor,
   removeAdult,
+  startCheckout,
+  type CurrencyPrice,
   type Adult,
   type HouseholdSummary,
   type PlanRow,
@@ -79,19 +82,24 @@ export function Billing({
   onChanged: () => void
 }) {
   const [plans, setPlans] = useState<PlanRow[] | null>(null)
+  const [prices, setPrices] = useState<Record<string, CurrencyPrice[]>>({})
   const [adults, setAdults] = useState<Adult[] | null>(null)
+  const [period, setPeriod] = useState<'monthly' | 'annual'>('monthly')
+  const [payingPlan, setPayingPlan] = useState<string | null>(null)
   const [invite, setInvite] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const reload = useCallback(async () => {
-    const [p, a] = await Promise.all([
+    const [p, a, pr] = await Promise.all([
       loadPlans().catch(() => [] as PlanRow[]),
       loadAdults(householdId).catch(() => [] as Adult[]),
+      loadPlanPrices().catch(() => ({}) as Record<string, CurrencyPrice[]>),
     ])
     setPlans(p)
     setAdults(a)
+    setPrices(pr)
   }, [householdId])
 
   useEffect(() => {
@@ -103,6 +111,23 @@ export function Billing({
   const adultsAllowed = current?.maxParents ?? 1
   const canAddAdult = adultsUsed < adultsAllowed
   const link = invite ? `${window.location.origin}/join/${invite}` : ''
+
+  /**
+   * Sends the customer to the provider.
+   *
+   * A full navigation rather than a popup: payment pages are routinely blocked
+   * as popups, and a blocked window looks to a parent like the button is broken.
+   */
+  const pay = async (planId: string) => {
+    setPayingPlan(planId)
+    setError(null)
+    try {
+      window.location.assign(await startCheckout('opay', householdId, planId, period))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start checkout.')
+      setPayingPlan(null)
+    }
+  }
 
   const inviteAdult = async () => {
     setBusy(true)
@@ -214,7 +239,23 @@ export function Billing({
         />
       )}
 
-      <h2 className="mt-9 text-[12px] font-bold tracking-[0.06em] text-brand">PLANS</h2>
+      <div className="mt-9 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[12px] font-bold tracking-[0.06em] text-brand">PLANS</h2>
+        <div className="flex gap-1 rounded-xl bg-cream p-1">
+          {(['monthly', 'annual'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setPeriod(v)}
+              className={`rounded-lg px-3 py-1.5 text-[12px] font-bold ${
+                period === v ? 'bg-white text-ink' : 'text-body'
+              }`}
+            >
+              {v === 'monthly' ? 'Monthly' : 'Yearly'}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {!plans ? (
         <p className="mt-2 text-[13px] text-body">Loading plans…</p>
@@ -224,6 +265,7 @@ export function Billing({
             .filter((p) => p.active || p.id === data.plan)
             .map((p) => {
               const isCurrent = p.id === data.plan
+              const ngn = (prices[p.id] ?? []).find((x) => x.currency === 'NGN')
               return (
                 <div
                   key={p.id}
@@ -257,12 +299,23 @@ export function Billing({
                       <span className="block rounded-xl bg-white px-3 py-2.5 text-center text-[12.5px] font-bold text-brand">
                         Your current plan
                       </span>
+                    ) : ngn && (period === 'annual' ? ngn.annual : ngn.monthly) > 0 ? (
+                      <button
+                        type="button"
+                        disabled={payingPlan !== null}
+                        onClick={() => void pay(p.id)}
+                        className="block w-full rounded-xl bg-brand px-3 py-2.5 text-center text-[12.5px] font-bold text-white disabled:opacity-50"
+                      >
+                        {payingPlan === p.id
+                          ? 'Opening checkout…'
+                          : `Pay ${formatPrice(period === 'annual' ? ngn.annual : ngn.monthly, 'NGN')}`}
+                      </button>
                     ) : (
-                      // No self-service upgrade until money can actually change
-                      // hands. A button that silently granted a paid tier would
-                      // be a hole, not a feature.
+                      // Refused rather than priced at zero. A checkout button
+                      // with no price behind it takes the customer to a broken
+                      // page, which is worse than saying so here.
                       <span className="block rounded-xl bg-cream px-3 py-2.5 text-center text-[12.5px] font-bold text-muted">
-                        Checkout coming soon
+                        No price set yet
                       </span>
                     )}
                   </div>
