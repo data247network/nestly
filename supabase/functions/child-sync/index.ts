@@ -37,6 +37,48 @@ const MAX_EVENTS = 200
 const MAX_APPS = 200
 const MAX_SITES = 300
 
+/**
+ * Kinds that should reach a parent's phone as a notification rather than
+ * waiting to be found in the feed. Must match `PUSH_KINDS` in push-notify,
+ * which decides what is actually sent — this is only the trigger.
+ */
+const NOTIFIABLE: ReadonlySet<string> = new Set([
+  "zone-enter",
+  "zone-leave",
+  "filter-off",
+  "contact-added",
+  "tamper",
+])
+
+/** Bounded, so the child's upload can never be held up by the notifier. */
+const NOTIFY_TIMEOUT_MS = 5000
+
+/**
+ * Hands the child off to the notifier.
+ *
+ * Awaited rather than left floating: a promise abandoned after the response is
+ * returned may be torn down with the isolate, and push failing silently is
+ * exactly the outcome that is hardest to notice. Cheap to wait for — only
+ * uploads that actually carry an alert reach here — and any failure is
+ * swallowed, because a notification is a convenience on top of an upload that
+ * has already succeeded.
+ */
+async function notify(childId: string): Promise<void> {
+  try {
+    await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/push-notify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+      },
+      body: JSON.stringify({ childId }),
+      signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+    })
+  } catch (e) {
+    console.error("child-sync: push-notify failed —", e)
+  }
+}
+
 /** Constant-time compare, so the secret cannot be recovered byte by byte. */
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false
@@ -145,6 +187,14 @@ Deno.serve(async (req: Request) => {
       { onConflict: "child_id,seq", ignoreDuplicates: true },
     )
     results.events = error ? "failed" : events.length
+
+    // The upload is already durable at this point, which is the ordering that
+    // matters: a notifier that fell over must not cost the parent the event
+    // itself. push-notify works out for itself which rows are new — a replayed
+    // batch is the normal case here and must not buzz twice.
+    if (!error && events.some((e) => NOTIFIABLE.has(e.kind))) {
+      await notify(childId)
+    }
   }
 
   if (body.usage?.day) {

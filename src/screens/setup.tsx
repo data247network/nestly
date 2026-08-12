@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useDevice } from '../platform/device'
 import { useStore } from '../app/store'
 import { childCapacity, pairingBlockedReason } from '../app/plans'
+import { releasePush } from '../app/PushBridge'
 import type { Peer } from '../link/transport'
 import { Scene } from '../art/Scene'
 import {
@@ -305,7 +306,11 @@ export function PairChild({ onDone }: { onDone?: () => void }) {
           onClick={() => go('plans')}
         />
 
-        <Row title="Sign out" hint="Locks this app on this phone" onClick={() => void signOut()} />
+        <Row
+          title="Sign out"
+          hint="Locks this app on this phone"
+          onClick={() => void releasePush().then(signOut)}
+        />
 
         <div className="rounded-2xl bg-tint px-4 py-3 text-[11.5px] leading-relaxed text-tealInk">
           The phones sync over Bluetooth whenever they're close. Apart, each

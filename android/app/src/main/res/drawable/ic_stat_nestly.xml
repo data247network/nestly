@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The status-bar icon for push notifications.
+
+  Android masks small icons to a silhouette: every non-transparent pixel is
+  redrawn in the system's own colour. So this has to be a white-on-transparent
+  shape, not the launcher icon — pointing FCM at @mipmap/ic_launcher gives a
+  featureless white square, which is what happens by default when no icon is
+  declared.
+
+  The shape is the Nestly mark from src/ui/kit.tsx: the rounded square with the
+  circle knocked out of it by evenOdd, so it survives being flattened to one
+  colour.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M8.4,2H15.6A6.4,6.4 0 0,1 22,8.4V15.6A6.4,6.4 0 0,1 15.6,22H8.4A6.4,6.4 0 0,1 2,15.6V8.4A6.4,6.4 0 0,1 8.4,2ZM12,8.2A3.8,3.8 0 1,0 12.01,8.2Z" />
+</vector>

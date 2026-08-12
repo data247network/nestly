@@ -43,6 +43,27 @@
             </intent-filter>
         </receiver>
 
+        <!--
+          Defaults for notifications delivered by Firebase while Nestly is not
+          in the foreground. In that case the system builds the notification
+          itself, before any of our code runs, so anything not declared here
+          cannot be set later: without the channel id Android files the alert
+          under a "Miscellaneous" channel it invents, which is silent from
+          Android 8 onward — a safety alert that does not make a sound.
+
+          The channel itself is created in src/platform/push.ts. Declaring an id
+          here does not create it; it only says which one to use.
+        -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="nestly-alerts" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_nestly" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/nestly_notification" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

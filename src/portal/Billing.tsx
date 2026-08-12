@@ -5,12 +5,16 @@ import {
   loadAdults,
   loadPlanPrices,
   loadPlans,
+  loadSubscription,
   nextPlanFor,
+  openBillingPortal,
   removeAdult,
   startCheckout,
   type CurrencyPrice,
   type Adult,
+  type HouseholdSubscription,
   type HouseholdSummary,
+  type PayProvider,
   type PlanRow,
 } from '../cloud/sync'
 import { Display } from '../ui/kit'
@@ -84,6 +88,7 @@ export function Billing({
   const [plans, setPlans] = useState<PlanRow[] | null>(null)
   const [prices, setPrices] = useState<Record<string, CurrencyPrice[]>>({})
   const [adults, setAdults] = useState<Adult[] | null>(null)
+  const [subscription, setSubscription] = useState<HouseholdSubscription | null>(null)
   const [period, setPeriod] = useState<'monthly' | 'annual'>('monthly')
   const [payingPlan, setPayingPlan] = useState<string | null>(null)
   const [invite, setInvite] = useState<string | null>(null)
@@ -92,14 +97,16 @@ export function Billing({
   const [busy, setBusy] = useState(false)
 
   const reload = useCallback(async () => {
-    const [p, a, pr] = await Promise.all([
+    const [p, a, pr, sub] = await Promise.all([
       loadPlans().catch(() => [] as PlanRow[]),
       loadAdults(householdId).catch(() => [] as Adult[]),
       loadPlanPrices().catch(() => ({}) as Record<string, CurrencyPrice[]>),
+      loadSubscription(householdId).catch(() => null),
     ])
     setPlans(p)
     setAdults(a)
     setPrices(pr)
+    setSubscription(sub)
   }, [householdId])
 
   useEffect(() => {
@@ -118,14 +125,26 @@ export function Billing({
    * A full navigation rather than a popup: payment pages are routinely blocked
    * as popups, and a blocked window looks to a parent like the button is broken.
    */
-  const pay = async (planId: string) => {
-    setPayingPlan(planId)
+  const pay = async (provider: PayProvider, planId: string) => {
+    setPayingPlan(`${planId}:${provider}`)
     setError(null)
     try {
-      window.location.assign(await startCheckout('opay', householdId, planId, period))
+      window.location.assign(await startCheckout(provider, householdId, planId, period))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not start checkout.')
       setPayingPlan(null)
+    }
+  }
+
+  /** Cancelling, and changing the card, both live on Stripe's hosted page. */
+  const manageBilling = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      window.location.assign(await openBillingPortal(householdId))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not open billing.')
+      setBusy(false)
     }
   }
 
@@ -155,6 +174,36 @@ export function Billing({
       {error ? (
         <div className="mt-4 rounded-xl bg-coralBg px-4 py-3 text-[12.5px] text-coralInk">
           {error}
+        </div>
+      ) : null}
+
+      {/* A subscription a parent cannot cancel from inside the product is not
+          one to sell. Only shown for Stripe: an OPay household bought a fixed
+          period and has nothing running to stop. */}
+      {subscription?.manageable ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line px-4 py-3.5">
+          <div className="min-w-0">
+            <div className="text-[13px] font-bold">
+              {subscription.status === 'past_due'
+                ? 'Your last payment did not go through'
+                : 'Subscription active'}
+            </div>
+            <div className="mt-0.5 text-[11.5px] text-body">
+              {subscription.status === 'past_due'
+                ? 'Update your card to keep the plan. Nothing changes until Stripe stops retrying.'
+                : subscription.currentPeriodEnd
+                  ? `Renews ${new Date(subscription.currentPeriodEnd).toLocaleDateString()}.`
+                  : 'Renews automatically.'}
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void manageBilling()}
+            className="shrink-0 rounded-xl border border-line px-4 py-2.5 text-[12.5px] font-bold text-brand disabled:opacity-50"
+          >
+            {busy ? 'Opening…' : 'Manage or cancel'}
+          </button>
         </div>
       ) : null}
 
@@ -265,7 +314,18 @@ export function Billing({
             .filter((p) => p.active || p.id === data.plan)
             .map((p) => {
               const isCurrent = p.id === data.plan
+              // Two providers, two currencies, and they are not alternatives to
+              // each other in a way the customer can ignore: Stripe subscribes,
+              // OPay sells one fixed period. Pounds lead because pounds are what
+              // the card above quotes — the button used to offer naira under a
+              // sterling headline, which is not a price anyone agreed to.
+              const amountFor = (c: CurrencyPrice | undefined) =>
+                c ? (period === 'annual' ? c.annual : c.monthly) : 0
+              const gbp = (prices[p.id] ?? []).find((x) => x.currency === 'GBP')
               const ngn = (prices[p.id] ?? []).find((x) => x.currency === 'NGN')
+              const gbpAmount = amountFor(gbp)
+              const ngnAmount = amountFor(ngn)
+              const busyWith = (provider: PayProvider) => payingPlan === `${p.id}:${provider}`
               return (
                 <div
                   key={p.id}
@@ -294,22 +354,60 @@ export function Billing({
                     <p className="mt-2 text-[11.5px] leading-relaxed text-muted">{p.blurb}</p>
                   ) : null}
 
-                  <div className="mt-4">
+                  <div className="mt-4 flex flex-col gap-2">
                     {isCurrent ? (
                       <span className="block rounded-xl bg-white px-3 py-2.5 text-center text-[12.5px] font-bold text-brand">
                         Your current plan
                       </span>
-                    ) : ngn && (period === 'annual' ? ngn.annual : ngn.monthly) > 0 ? (
-                      <button
-                        type="button"
-                        disabled={payingPlan !== null}
-                        onClick={() => void pay(p.id)}
-                        className="block w-full rounded-xl bg-brand px-3 py-2.5 text-center text-[12.5px] font-bold text-white disabled:opacity-50"
-                      >
-                        {payingPlan === p.id
-                          ? 'Opening checkout…'
-                          : `Pay ${formatPrice(period === 'annual' ? ngn.annual : ngn.monthly, 'NGN')}`}
-                      </button>
+                    ) : gbpAmount > 0 || ngnAmount > 0 ? (
+                      <>
+                        {gbpAmount > 0 ? (
+                          <button
+                            type="button"
+                            disabled={payingPlan !== null}
+                            onClick={() => void pay('stripe', p.id)}
+                            className="block w-full rounded-xl bg-brand px-3 py-2.5 text-center text-[12.5px] font-bold text-white disabled:opacity-50"
+                          >
+                            {busyWith('stripe')
+                              ? 'Opening checkout…'
+                              : `Pay ${formatPrice(gbpAmount, 'GBP')} ${
+                                  period === 'annual' ? 'a year' : 'a month'
+                                }`}
+                          </button>
+                        ) : null}
+
+                        {ngnAmount > 0 ? (
+                          <button
+                            type="button"
+                            disabled={payingPlan !== null}
+                            onClick={() => void pay('opay', p.id)}
+                            className={`block w-full rounded-xl px-3 py-2.5 text-center text-[12.5px] font-bold disabled:opacity-50 ${
+                              gbpAmount > 0
+                                ? 'border border-line text-brand'
+                                : 'bg-brand text-white'
+                            }`}
+                          >
+                            {busyWith('opay')
+                              ? 'Opening checkout…'
+                              : `Pay ${formatPrice(ngnAmount, 'NGN')} in naira`}
+                          </button>
+                        ) : null}
+
+                        {/* The two are not the same product, and a customer
+                            choosing between them deserves to be told which
+                            renews before they pay rather than after. */}
+                        <p className="text-[10.5px] leading-snug text-muted">
+                          {gbpAmount > 0 && ngnAmount > 0
+                            ? 'Card renews automatically until you cancel. Naira buys one ' +
+                              (period === 'annual' ? 'year' : 'month') +
+                              ', with nothing to cancel.'
+                            : gbpAmount > 0
+                              ? 'Renews automatically until you cancel.'
+                              : 'Buys one ' +
+                                (period === 'annual' ? 'year' : 'month') +
+                                ', with nothing to cancel.'}
+                        </p>
+                      </>
                     ) : (
                       // Refused rather than priced at zero. A checkout button
                       // with no price behind it takes the customer to a broken

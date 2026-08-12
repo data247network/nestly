@@ -13,4 +13,8 @@ ext {
     androidxJunitVersion = '1.1.5'
     androidxEspressoCoreVersion = '3.5.1'
     cordovaAndroidVersion = '10.1.1'
+    // Read by @capacitor/push-notifications. Pinned here rather than left to the
+    // plugin's own default so a plugin bump cannot quietly move the Firebase SDK
+    // underneath a release build.
+    firebaseMessagingVersion = '23.4.1'
 }

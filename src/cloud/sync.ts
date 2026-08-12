@@ -538,6 +538,38 @@ export async function pushTelemetry(childId: string, t: Telemetry) {
     })
 }
 
+/* ----------------------------------------------------- push tokens -- */
+
+/**
+ * Records this phone's FCM token against the signed-in parent.
+ *
+ * Goes through a SECURITY DEFINER function rather than an upsert, for the same
+ * reason `redeemAdultInvite` does: the token is keyed by handset, not by
+ * account, so a second parent signing in on a phone the first one used collides
+ * with a row they do not own. RLS refuses the update — correctly — and a plain
+ * upsert would fail there, leaving the new parent with no notifications and the
+ * old one still being buzzed about a household they have left.
+ */
+export async function registerDeviceToken(token: string): Promise<void> {
+  if (!hasCloud() || !token) return
+  const { error } = await supabase().rpc('claim_device_token', {
+    p_token: token,
+    p_platform: 'android',
+  })
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * Drops this phone's token.
+ *
+ * A plain delete, scoped by RLS to rows the caller owns — so this can only ever
+ * release your own registration, never someone else's.
+ */
+export async function forgetDeviceToken(token: string): Promise<void> {
+  if (!hasCloud() || !token) return
+  await supabase().from('device_tokens').delete().eq('token', token)
+}
+
 /* ------------------------------------------------------------ plans -- */
 
 export type PlanRow = {
@@ -738,8 +770,22 @@ export async function loadPlanPrices(): Promise<Record<string, CurrencyPrice[]>>
  * the plan — a client that could name its own price would buy Premium for a
  * penny.
  */
+/**
+ * Which provider sells which currency.
+ *
+ * Not interchangeable, and the difference is visible to the customer: Stripe
+ * sells a subscription that renews until cancelled, OPay sells a fixed period
+ * that runs out. Anything showing a price has to say which of those it is.
+ */
+export type PayProvider = 'opay' | 'stripe'
+
+export const PROVIDER_CURRENCY: Record<PayProvider, string> = {
+  stripe: 'GBP',
+  opay: 'NGN',
+}
+
 export async function startCheckout(
-  provider: 'opay',
+  provider: PayProvider,
   householdId: string,
   planId: string,
   period: 'monthly' | 'annual',
@@ -762,6 +808,59 @@ export async function startCheckout(
     throw new Error(body.error ?? 'Could not start checkout.')
   }
   return body.checkoutUrl
+}
+
+/**
+ * Where a parent cancels, or changes the card behind, a Stripe subscription.
+ *
+ * Stripe hosts the page, so no card details reach this code and the resulting
+ * cancellation arrives back as a webhook like any other change.
+ */
+export async function openBillingPortal(householdId: string): Promise<string> {
+  const { data: session } = await supabase().auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Sign in first.')
+
+  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-portal`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ householdId }),
+  })
+  const body = (await res.json().catch(() => ({}))) as { portalUrl?: string; error?: string }
+  if (!res.ok || !body.portalUrl) {
+    throw new Error(body.error ?? 'Could not open billing.')
+  }
+  return body.portalUrl
+}
+
+export type HouseholdSubscription = {
+  provider: string
+  status: string
+  currentPeriodEnd: string | null
+  /** Whether there is a Stripe customer behind this, so the portal can open. */
+  manageable: boolean
+}
+
+/** The household's subscription, for the "manage billing" affordance. */
+export async function loadSubscription(householdId: string): Promise<HouseholdSubscription | null> {
+  if (!hasCloud()) return null
+  const { data } = await supabase()
+    .from('subscriptions')
+    .select('provider, status, current_period_end, provider_customer_id')
+    .eq('household_id', householdId)
+    .maybeSingle()
+
+  if (!data) return null
+  return {
+    provider: (data.provider as string) ?? 'opay',
+    status: (data.status as string) ?? 'active',
+    currentPeriodEnd: (data.current_period_end as string) ?? null,
+    manageable: data.provider === 'stripe' && Boolean(data.provider_customer_id),
+  }
 }
 
 export async function adminSetPlanPrice(

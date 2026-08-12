@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tints the small icon in the notification shade. Brand teal, matching
+         `brand` in tailwind.config.js. -->
+    <color name="nestly_notification">#147D77</color>
+</resources>
