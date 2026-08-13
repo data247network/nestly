@@ -14,6 +14,32 @@ import { Display } from '../ui/kit'
  * create an account and then find the link again is how invitations get
  * abandoned.
  */
+/**
+ * Reads a failed email confirmation out of the URL.
+ *
+ * Supabase reports these in the fragment (`#error=...&error_description=...`)
+ * rather than as a request that fails, so without this they are invisible: the
+ * page just renders the form again. The message is rewritten because Supabase's
+ * own wording is written for developers and the fix — ask for a fresh
+ * invitation, or sign in if the account already exists — is not in it.
+ */
+function authErrorFromUrl(): string | null {
+  try {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const query = new URLSearchParams(window.location.search)
+    const code = hash.get('error_code') ?? query.get('error_code')
+    const raw = hash.get('error_description') ?? query.get('error_description')
+    if (!code && !raw) return null
+
+    if (code === 'otp_expired' || /expired/i.test(raw ?? '')) {
+      return 'That confirmation link has expired. Sign in below if you already confirmed, or ask for a fresh invitation.'
+    }
+    return 'That confirmation link could not be used. Sign in below if you already have an account, or ask for a fresh invitation.'
+  } catch {
+    return null
+  }
+}
+
 export function Join({ code }: { code: string | null }) {
   const [phase, setPhase] = useState<'checking' | 'auth' | 'joining' | 'done' | 'error'>(
     'checking',
@@ -39,6 +65,20 @@ export function Join({ code }: { code: string | null }) {
   useEffect(() => {
     void (async () => {
       if (!hasCloud() || !code) return setPhase('error')
+
+      // An expired or already-used confirmation link comes back as an error in
+      // the URL fragment, not as a failed request. Nothing read it, so the page
+      // rendered the sign-up form again as though they had never clicked
+      // anything — and the second attempt fails with "already registered",
+      // which explains none of it.
+      const failure = authErrorFromUrl()
+      if (failure) {
+        setMessage(failure)
+        setIsSignUp(false)
+        setPhase('auth')
+        return
+      }
+
       const { data } = await supabase().auth.getSession()
       // Already signed in: nothing to ask, just join.
       if (data.session) return void join()
@@ -53,10 +93,16 @@ export function Join({ code }: { code: string | null }) {
     setMessage(null)
     try {
       if (isSignUp) {
-        const { signedIn } = await signUp(email, password)
+        // Confirmation returns them to this same invitation rather than to the
+        // front page, so the code survives the round trip through their inbox.
+        const { signedIn } = await signUp(
+          email,
+          password,
+          `${window.location.origin}/join/${code}`,
+        )
         if (!signedIn) {
           setMessage(
-            'Check your inbox and confirm your email, then open this link again to join.',
+            'Almost there — confirm your email. The link in it brings you straight back here and finishes joining.',
           )
           setBusy(false)
           return

@@ -74,8 +74,25 @@ export async function signIn(email: string, password: string) {
 export async function signUp(
   email: string,
   password: string,
+  /**
+   * Where the confirmation email should land them.
+   *
+   * Without it Supabase falls back to the project's Site URL, which is the
+   * portal's front page — so someone confirming an invitation arrives at the
+   * marketing site with the invite code gone, having been told to "open this
+   * link again" for a link they no longer have. Sending them back to the exact
+   * invite closes that.
+   *
+   * The URL must also be listed under Auth → URL Configuration → Redirect URLs,
+   * or Supabase silently substitutes the Site URL and the problem is back.
+   */
+  redirectTo?: string,
 ): Promise<{ userId: string | null; signedIn: boolean }> {
-  const { data, error } = await supabase().auth.signUp({ email, password })
+  const { data, error } = await supabase().auth.signUp({
+    email,
+    password,
+    ...(redirectTo ? { options: { emailRedirectTo: redirectTo } } : {}),
+  })
   if (error) throw new Error(friendly(error.message))
   return { userId: data.user?.id ?? null, signedIn: data.session != null }
 }
