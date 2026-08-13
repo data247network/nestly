@@ -104,6 +104,22 @@ function hex(bytes: Uint8Array): string {
 const TOLERANCE_SECONDS = 300
 
 /**
+ * Why a signature was refused.
+ *
+ * A boolean was not enough in practice. Stripe delivered genuine events, this
+ * returned 401, and the logs recorded only "Rejected" — which is right to send
+ * back over the wire but useless to debug, because a missing header, a clock
+ * problem and a mismatched secret are three unrelated faults with three
+ * unrelated fixes. `digest-mismatch` in particular almost always means the
+ * secret does not belong to this endpoint: test-mode and live-mode signing
+ * secrets differ, and so does every endpoint's.
+ */
+export type SignatureResult =
+  | { ok: true }
+  | { ok: false; reason: "no-header" | "malformed" | "stale"; ageSeconds?: number }
+  | { ok: false; reason: "digest-mismatch" }
+
+/**
  * Verifies a `Stripe-Signature` header against the raw request body.
  *
  * Two things are easy to get wrong and both fail closed in the same
@@ -116,7 +132,9 @@ export async function verifySignature(
   rawBody: string,
   signatureHeader: string,
   secret: string,
-): Promise<boolean> {
+): Promise<SignatureResult> {
+  if (!signatureHeader) return { ok: false, reason: "no-header" }
+
   let timestamp = ""
   const candidates: string[] = []
 
@@ -129,10 +147,11 @@ export async function verifySignature(
     else if (name === "v1") candidates.push(value)
   }
 
-  if (!timestamp || candidates.length === 0) return false
+  if (!timestamp || candidates.length === 0) return { ok: false, reason: "malformed" }
 
   const age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp))
-  if (!Number.isFinite(age) || age > TOLERANCE_SECONDS) return false
+  if (!Number.isFinite(age)) return { ok: false, reason: "malformed" }
+  if (age > TOLERANCE_SECONDS) return { ok: false, reason: "stale", ageSeconds: age }
 
   const enc = new TextEncoder()
   const key = await crypto.subtle.importKey(
@@ -147,5 +166,6 @@ export async function verifySignature(
   )
   const expected = hex(mac)
 
-  return candidates.some((candidate) => safeEqual(candidate.toLowerCase(), expected))
+  const matched = candidates.some((candidate) => safeEqual(candidate.toLowerCase(), expected))
+  return matched ? { ok: true } : { ok: false, reason: "digest-mismatch" }
 }

@@ -92,35 +92,52 @@ describe('verifySignature', () => {
   const body = '{"id":"evt_1","type":"invoice.paid"}'
 
   it('accepts a genuine signature', async () => {
-    expect(await verifySignature(body, await sign(body, secret), secret)).toBe(true)
+    expect(await verifySignature(body, await sign(body, secret), secret)).toEqual({ ok: true })
   })
 
   it('rejects a tampered body', async () => {
     const header = await sign(body, secret)
     const forged = '{"id":"evt_1","type":"customer.subscription.deleted"}'
-    expect(await verifySignature(forged, header, secret)).toBe(false)
+    expect(await verifySignature(forged, header, secret)).toEqual({
+      ok: false,
+      reason: 'digest-mismatch',
+    })
   })
 
-  it('rejects a signature made with a different secret', async () => {
-    expect(await verifySignature(body, await sign(body, 'whsec_wrong'), secret)).toBe(false)
+  // The one that actually bit: Stripe delivered, this returned 401, and the
+  // reason is what separates "wrong secret" from "not Stripe calling".
+  it('reports digest-mismatch for a signature made with a different secret', async () => {
+    expect(await verifySignature(body, await sign(body, 'whsec_wrong'), secret)).toEqual({
+      ok: false,
+      reason: 'digest-mismatch',
+    })
   })
 
   it('rejects a stale timestamp, which is what stops a replay', async () => {
     const old = Math.floor(Date.now() / 1000) - 600
-    expect(await verifySignature(body, await sign(body, secret, old), secret)).toBe(false)
+    const result = await verifySignature(body, await sign(body, secret, old), secret)
+    expect(result.ok).toBe(false)
+    expect(result).toMatchObject({ reason: 'stale' })
+    expect((result as { ageSeconds: number }).ageSeconds).toBeGreaterThanOrEqual(600)
   })
 
   it('accepts when any one v1 matches, as during a secret rotation', async () => {
     const genuine = await sign(body, secret)
     const timestamp = genuine.split(',')[0].slice(2)
     const stale = (await sign(body, 'whsec_previous', Number(timestamp))).split(',')[1]
-    expect(await verifySignature(body, `${genuine},${stale}`, secret)).toBe(true)
+    expect(await verifySignature(body, `${genuine},${stale}`, secret)).toEqual({ ok: true })
   })
 
-  it('rejects a header with no signature in it', async () => {
-    expect(await verifySignature(body, `t=${Math.floor(Date.now() / 1000)}`, secret)).toBe(false)
-    expect(await verifySignature(body, '', secret)).toBe(false)
-    expect(await verifySignature(body, 'garbage', secret)).toBe(false)
+  it('distinguishes a missing header from a malformed one', async () => {
+    expect(await verifySignature(body, '', secret)).toEqual({ ok: false, reason: 'no-header' })
+    expect(await verifySignature(body, `t=${Math.floor(Date.now() / 1000)}`, secret)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    })
+    expect(await verifySignature(body, 'garbage', secret)).toEqual({
+      ok: false,
+      reason: 'malformed',
+    })
   })
 })
 

@@ -123,6 +123,11 @@ Deno.serve(async (req: Request) => {
   // OPay takes minor units, so naira are sent as kobo. Sending 4.99 where 499
   // is meant charges a hundredth of the price.
   const payload = {
+    // The merchant account's own registered business country decides which
+    // market the cashier renders for; this field selects the country *of the
+    // payment* within what that account is allowed to take. An account
+    // registered outside Nigeria cannot be made to accept NGN by sending "NG"
+    // here — that comes back as a refusal from OPay rather than a bad page.
     country: "NG",
     reference,
     amount: { total: Math.round(amount * 100), currency: "NGN" },
@@ -130,6 +135,10 @@ Deno.serve(async (req: Request) => {
     cancelUrl: `${portal}/hub`,
     callbackUrl: `${url}/functions/v1/opay-webhook`,
     expireAt: 30,
+    // Documented as optional, but it decides which checkout layout OPay serves.
+    // Left unset the cashier can render its app-first flow, which on a desktop
+    // browser is a dead end.
+    customerVisitSource: "BROWSER",
     userInfo: {
       userId,
       userEmail: who?.user?.email ?? "",
@@ -155,7 +164,8 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify(payload),
     })
-  } catch {
+  } catch (e) {
+    console.error("opay-checkout: could not reach OPay —", e)
     await admin.from("payments").update({ status: "failed" }).eq("reference", reference)
     return json({ error: "Could not reach the payment provider." }, 502)
   }
@@ -167,8 +177,23 @@ Deno.serve(async (req: Request) => {
   }
 
   if (out.code !== "00000" || !out.data?.cashierUrl) {
+    // OPay's own code and message, in the logs.
+    //
+    // Three of these failed in a row and left nothing behind but
+    // `status = 'failed'`, which says a request was refused and not one word
+    // about why — and OPay's refusals are specific and actionable
+    // (unsupported currency for the merchant's country, wrong environment for
+    // the key, duplicate reference). Nothing secret is in this response.
+    console.error(
+      "opay-checkout: refused — http", res.status,
+      "code", out.code ?? "(none)",
+      "message", out.message ?? "(none)",
+    )
     await admin.from("payments").update({ status: "failed" }).eq("reference", reference)
-    return json({ error: out.message ?? "The payment provider refused this request." }, 502)
+    return json({
+      error: out.message ?? "The payment provider refused this request.",
+      providerCode: out.code ?? null,
+    }, 502)
   }
 
   await admin

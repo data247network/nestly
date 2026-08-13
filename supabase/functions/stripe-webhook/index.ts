@@ -159,9 +159,23 @@ Deno.serve(async (req: Request) => {
   const raw = await req.text()
   const signature = req.headers.get("Stripe-Signature") ?? ""
 
-  if (!signature || !(await verifySignature(raw, signature, secret))) {
-    // Deliberately terse. An attacker probing the format learns nothing from
-    // "invalid signature" that they should be told.
+  const verified = await verifySignature(raw, signature, secret)
+  if (!verified.ok) {
+    // Terse over the wire — an attacker probing the format learns nothing from
+    // "invalid signature" that they should be told — but specific in the logs,
+    // because the three ways this fails have nothing to do with each other:
+    //
+    //   no-header/malformed  something that is not Stripe is posting here
+    //   stale                clock skew, or a replayed delivery
+    //   digest-mismatch      STRIPE_WEBHOOK_SECRET is not this endpoint's
+    //                        signing secret. Test-mode and live-mode secrets
+    //                        differ, and so does every endpoint's, so this is
+    //                        nearly always the wrong one pasted in.
+    console.error(
+      "stripe-webhook: rejected —",
+      verified.reason,
+      verified.reason === "stale" ? `age=${verified.ageSeconds}s` : "",
+    )
     return new Response("Rejected", { status: 401 })
   }
 
