@@ -31,10 +31,31 @@ const json = (body: unknown, status = 200) =>
     headers: { "Content-Type": "application/json", ...CORS },
   })
 
-/** Live unless explicitly told otherwise, so a test key cannot silently ship. */
-const OPAY_BASE = Deno.env.get("OPAY_ENV") === "sandbox"
-  ? "https://testapi.opaycheckout.com"
-  : "https://liveapi.opaycheckout.com"
+/**
+ * Where OPay lives, for this merchant.
+ *
+ * `OPAY_BASE_URL` overrides everything below. OPay routes by the merchant's
+ * *registered business country*, on a domain per region, and refuses anything
+ * sent to the wrong one:
+ *
+ *   request forbidden(request domain error.), you can find the correct
+ *   request domain for country[Egypt] in OPay doc.
+ *
+ * That is not a payload problem and no change to `country` or `currency` fixes
+ * it — it is the account. The override exists so that pointing at whichever
+ * host OPay names for a given account is a secret change rather than a deploy.
+ *
+ * Note that the domain and the currency travel together: an account registered
+ * in Egypt settles in EGP, so reaching the Egyptian host correctly still will
+ * not take naira. Selling in NGN needs a Nigerian merchant account.
+ */
+const OPAY_BASE = (
+  Deno.env.get("OPAY_BASE_URL")?.trim() ||
+  // Live unless explicitly told otherwise, so a test key cannot silently ship.
+  (Deno.env.get("OPAY_ENV") === "sandbox"
+    ? "https://testapi.opaycheckout.com"
+    : "https://liveapi.opaycheckout.com")
+).replace(/\/+$/, "")
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS })
