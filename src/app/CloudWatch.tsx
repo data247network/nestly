@@ -23,6 +23,15 @@ import { useDevice } from '../platform/device'
  * store or touches policy. A cloud outage costs a parent remote visibility and
  * nothing else.
  */
+/**
+ * How often the parent's view re-reads the server while it is on screen.
+ *
+ * The child uploads telemetry every 60s, so polling faster than this buys
+ * nothing but requests; polling slower makes a parent watching a child walk
+ * home wait for news that has already arrived.
+ */
+const REFRESH_INTERVAL_MS = 15_000
+
 export function useCloudChildren(): {
   household: HouseholdSummary | null
   /** Wall-clock time of the last successful read, for a staleness indicator. */
@@ -82,6 +91,48 @@ export function useCloudChildren(): {
     return () => {
       clearTimeout(pending)
       stop()
+    }
+  }, [role, childKey, refresh])
+
+  // A timed refresh underneath the socket.
+  //
+  // Realtime is the fast path but it is not a guarantee: a websocket that drops
+  // on a phone changing network reconnects silently and the screen simply stops
+  // updating, with nothing on it to say so. Polling means the worst case is
+  // stale by one interval rather than stale until the app is reopened.
+  //
+  // Paused when the app is not on screen. A parent's phone in a pocket polling
+  // all afternoon spends battery to refresh a view nobody is looking at, and
+  // the visibility change itself triggers an immediate catch-up.
+  useEffect(() => {
+    if (!hasCloud() || role !== 'parent' || !childKey) return
+
+    let timer: ReturnType<typeof setInterval> | undefined
+
+    const start = () => {
+      if (timer) return
+      timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS)
+    }
+    const stopTimer = () => {
+      clearInterval(timer)
+      timer = undefined
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void refresh()
+        start()
+      } else {
+        stopTimer()
+      }
+    }
+
+    onVisibility()
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      stopTimer()
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [role, childKey, refresh])
 

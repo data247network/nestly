@@ -223,15 +223,24 @@ function greeting() {
 /* --------------------------------------------------------------- map/zones */
 
 /**
- * The newer of two positions, either of which may be absent.
+ * The position to show, internet first.
  *
- * Transport-agnostic on purpose: a fix is a fix, and the only thing that makes
- * one better than another is being more recent.
+ * A deliberate product decision rather than the obvious engineering one. The
+ * obvious one is "whichever is newer", and on paper it wins: Bluetooth reports
+ * every 15s against the cloud's 60s, so when the phones are together the radio
+ * genuinely has the fresher fix.
+ *
+ * It loses on the case that matters. Bluetooth only says anything at all when
+ * the two phones are in the same room, which is the one situation where a
+ * parent does not need a map. The server is the source that keeps answering
+ * when the child is at school, and answering consistently is worth more than
+ * being 45 seconds newer in the room where you can see them.
+ *
+ * Bluetooth still carries the position when there is no signal, which is the
+ * offline promise; it just stops overriding a server that has an answer.
  */
-function fresher(a: Fix | null, b: Fix | null): Fix | null {
-  if (!a) return b
-  if (!b) return a
-  return b.ts > a.ts ? b : a
+function preferredFix(cloud: Fix | null, bluetooth: Fix | null): Fix | null {
+  return cloud ?? bluetooth
 }
 
 /**
@@ -260,21 +269,12 @@ export function MapZones() {
   const fences = state.geofences
   const who = activeChild?.name ?? 'your child'
 
-  // Whichever position is actually newer, not whichever arrived by the
-  // preferred road.
-  //
   // This screen used to read the Bluetooth link and nothing else, which meant
   // the one time a parent most needs the map — child out of range — was the one
   // time it said "No position yet", while the server had a fix from a minute
   // ago. The child device uploads on its own; nothing was reading it back.
-  //
-  // A fixed order of preference would be wrong in one direction or the other.
-  // Bluetooth reports every 15s and the cloud every 60s, so preferring the
-  // internet outright would show a staler position whenever the phones are
-  // together. Comparing timestamps gets both cases right and needs no rule
-  // about which transport is "primary".
   const cloudFix = matchingCloudChild(remote?.children, child?.cloudChildId)?.fix ?? null
-  const fix = fresher(child?.telemetry?.fix ?? null, cloudFix)
+  const fix = preferredFix(cloudFix, child?.telemetry?.fix ?? null)
 
   return (
     <div className="flex h-full flex-col">
