@@ -1,6 +1,13 @@
 import { hasCloud, supabase } from './client'
 import { KEYS } from '../platform/storage'
-import type { ChildEvent, Fix, Policy, Telemetry } from '../link/protocol'
+import type {
+  AppUsageEntry,
+  ChildEvent,
+  Fix,
+  Policy,
+  SiteVisit,
+  Telemetry,
+} from '../link/protocol'
 
 /**
  * The cloud half of the link.
@@ -981,4 +988,86 @@ export function subscribeToChildren(
 export async function setDisplayName(name: string) {
   const { error } = await supabase().auth.updateUser({ data: { full_name: name.trim() } })
   if (error) throw new Error(error.message)
+}
+
+/* ------------------------------------------------- hydrating the app -- */
+
+/**
+ * Raw events per child, shaped for the app's own ingest action.
+ *
+ * The parent app's alerts feed, activity trail and reports all read from store
+ * fields that only the Bluetooth link ever wrote — so with the two phones
+ * apart, the screens were empty while the server held the answer. This is the
+ * other half of the pipe.
+ *
+ * `seq` is deliberately carried through unchanged. The ingest reducer
+ * de-duplicates on `(childId, seq)`, so the same event arriving over both links
+ * collapses to one entry with no coordination between them.
+ */
+export type CloudEventRow = {
+  childId: string
+  seq: number
+  ts: number
+  kind: string
+  ref?: string
+  cat?: string
+}
+
+export async function loadEventsForChildren(
+  childIds: string[],
+  sinceDays = 30,
+  limit = 500,
+): Promise<CloudEventRow[]> {
+  if (!hasCloud() || childIds.length === 0) return []
+  const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString()
+
+  const { data, error } = await supabase()
+    .from('child_events')
+    .select('child_id, seq, ts, kind, ref, cat')
+    .in('child_id', childIds)
+    .gte('ts', since)
+    .order('ts', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+
+  return (data ?? []).map((e) => ({
+    childId: e.child_id as string,
+    seq: Number(e.seq),
+    // The store works in epoch milliseconds; Postgres hands back a timestamp.
+    ts: new Date(e.ts as string).getTime(),
+    kind: e.kind as string,
+    ref: (e.ref as string) ?? undefined,
+    cat: (e.cat as string) ?? undefined,
+  }))
+}
+
+export type CloudUsageRow = {
+  childId: string
+  day: string
+  apps: AppUsageEntry[]
+  sites: SiteVisit[]
+  usageAccess: boolean
+  filterOn: boolean
+}
+
+/** Today's usage per child, for the reports screen. */
+export async function loadUsageForChildren(childIds: string[]): Promise<CloudUsageRow[]> {
+  if (!hasCloud() || childIds.length === 0) return []
+  const today = new Date().toISOString().slice(0, 10)
+
+  const { data, error } = await supabase()
+    .from('child_usage')
+    .select('child_id, day, apps, sites, usage_access, filter_on')
+    .in('child_id', childIds)
+    .eq('day', today)
+  if (error) throw error
+
+  return (data ?? []).map((u) => ({
+    childId: u.child_id as string,
+    day: u.day as string,
+    apps: (u.apps ?? []) as AppUsageEntry[],
+    sites: (u.sites ?? []) as SiteVisit[],
+    usageAccess: Boolean(u.usage_access),
+    filterOn: Boolean(u.filter_on),
+  }))
 }

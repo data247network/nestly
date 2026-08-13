@@ -5,6 +5,7 @@ import { SplashScreen } from '@capacitor/splash-screen'
 import { Screen } from './app/Router'
 import { PolicyBridge } from './app/PolicyBridge'
 import { CloudBridge } from './app/CloudBridge'
+import { CloudHydrate } from './app/CloudHydrate'
 import { PushBridge } from './app/PushBridge'
 import { WEB_SCREENS } from './app/nav'
 import { useStore } from './app/store'
@@ -113,6 +114,7 @@ export default function App() {
     <div className="safe-top flex h-full flex-col bg-white">
       <PolicyBridge />
       <CloudBridge />
+      <CloudHydrate />
       <PushBridge />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <UpdateBanner />

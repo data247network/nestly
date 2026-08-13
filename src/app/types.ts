@@ -44,6 +44,16 @@ export type Tone = 'teal' | 'amber' | 'coral' | 'violet'
 
 export type Child = {
   id: string
+  /**
+   * Which link this child came from.
+   *
+   * Absent means Bluetooth, which is every child that existed before the cloud
+   * did — so persisted state from an older build keeps its meaning without a
+   * migration. It matters because the two links prune independently: the BLE
+   * reconcile must not delete a child it has simply never seen over the radio,
+   * and the cloud sync must not delete one that is paired but not enrolled.
+   */
+  source?: 'ble' | 'cloud'
   name: string
   age: number
   avatar: string

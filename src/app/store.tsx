@@ -32,6 +32,7 @@ import type {
   Message,
   ScreenId,
   Scenario,
+  Tone,
 } from './types'
 
 /**
@@ -249,6 +250,17 @@ type Action =
    * ghosts behind that no unpair will ever clear.
    */
   | { type: 'reconcileChildren'; validIds: string[] }
+  | {
+      /**
+       * Children the account knows about that no radio has met.
+       *
+       * Owns only `source: 'cloud'` rows, so the two links never fight over the
+       * same list: this cannot delete a paired child, and the Bluetooth
+       * reconcile cannot delete one of these.
+       */
+      type: 'syncCloudChildren'
+      children: { id: string; name: string; avatar: string }[]
+    }
   | { type: 'renameChild'; id: string; name: string }
   | { type: 'setChildAvatar'; id: string; color: string }
   | { type: 'editChild'; id: string }
@@ -601,10 +613,68 @@ function apply(state: State, action: Action): State {
       }
     }
 
+    case 'syncCloudChildren': {
+      const incoming = new Map(action.children.map((c) => [c.id, c]))
+      const ble = state.children.filter((c) => c.source !== 'cloud')
+      const existing = new Map(
+        state.children.filter((c) => c.source === 'cloud').map((c) => [c.id, c]),
+      )
+
+      const cloud = action.children.map((c) => {
+        const prior = existing.get(c.id)
+        // Preserve everything the screens have already computed — battery,
+        // status, trend — and update only what the account is authoritative
+        // for. Rebuilding the row each poll would blank the live figures every
+        // fifteen seconds.
+        return prior
+          ? { ...prior, name: c.name, avatar: c.avatar }
+          : {
+              id: c.id,
+              source: 'cloud' as const,
+              name: c.name,
+              age: 0,
+              avatar: c.avatar,
+              status: 'Linked online',
+              statusTone: 'teal' as Tone,
+              screenMinutes: 0,
+              battery: 0,
+              trend: [],
+            }
+      })
+
+      const unchanged =
+        cloud.length === existing.size &&
+        cloud.every((c) => {
+          const prior = existing.get(c.id)
+          return prior && prior.name === c.name && prior.avatar === c.avatar
+        })
+      if (unchanged) return state
+
+      // Usage keyed to a cloud child that is gone would otherwise sit in the
+      // store forever, since nothing else knows those ids exist.
+      const usageByChild = { ...state.usageByChild }
+      for (const id of existing.keys()) {
+        if (!incoming.has(id)) delete usageByChild[id]
+      }
+
+      return {
+        ...state,
+        usageByChild,
+        children: [...ble, ...cloud].sort((a, b) => a.name.localeCompare(b.name)),
+      }
+    }
+
     case 'reconcileChildren': {
       const valid = new Set(action.validIds)
-      const children = state.children.filter((c) => valid.has(c.id))
-      const dropped = state.children.filter((c) => !valid.has(c.id)).map((c) => c.id)
+      // Cloud children are exempt. This action is driven by the Bluetooth
+      // pairing list, and a child enrolled online but never paired over the
+      // radio is not stale — it is simply somewhere else. Deleting it here is
+      // what made the whole cloud history vanish a second after it loaded.
+      const isBle = (c: (typeof state.children)[number]) => c.source !== 'cloud'
+      const children = state.children.filter((c) => !isBle(c) || valid.has(c.id))
+      const dropped = state.children
+        .filter((c) => isBle(c) && !valid.has(c.id))
+        .map((c) => c.id)
       const usageByChild = { ...state.usageByChild }
       for (const id of dropped) delete usageByChild[id]
 
@@ -650,10 +720,6 @@ function apply(state: State, action: Action): State {
       // Two destinations, deliberately different. The alerts feed is a place to
       // notice things and stays short; the activity trail is the full record,
       // including the routine starts and stops that would drown the feed.
-      const alerts = action.events
-        .map((e) => toAlert(e, who, action.childId))
-        .filter((a): a is Alert => a !== null)
-
       // Sequence numbers are per-child, so de-duplication has to be scoped to
       // the child. Keyed globally, a second device starting at seq 1 would have
       // its entire history silently discarded as "already seen".
@@ -663,6 +729,15 @@ function apply(state: State, action: Action): State {
       const fresh = action.events
         .filter((e) => !known.has(e.seq))
         .map((e) => ({ ...e, childId: action.childId }))
+
+      // Alerts are derived from the *new* events only, not from everything in
+      // the batch. The same event now arrives twice by design — once over
+      // Bluetooth and once from the cloud — and a replay is normal besides,
+      // since the child resends until acknowledged. Mapping the whole batch
+      // showed a parent the same zone exit two and three times over.
+      const alerts = fresh
+        .map((e) => toAlert(e, who, action.childId))
+        .filter((a): a is Alert => a !== null)
       if (alerts.length === 0 && fresh.length === 0) return state
 
       return {
