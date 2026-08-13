@@ -122,6 +122,15 @@ export const KEYS = {
    * relaunch is exactly as annoying as one that never clears.
    */
   notesReadAt: 'nestly.notes.readAt',
+  /**
+   * Where the native uploader posts.
+   *
+   * The endpoint is compiled into the JavaScript bundle from VITE_SUPABASE_URL,
+   * and the foreground service has no way to read an import.meta value. Writing
+   * it here is how the two halves agree on one address without hardcoding it in
+   * Java, where a change of project would mean editing two languages.
+   */
+  cloudEndpoint: 'nestly.cloud.endpoint',
 } as const
 
 /** Per-child key suffixes, so each paired device keeps its own cursor. */

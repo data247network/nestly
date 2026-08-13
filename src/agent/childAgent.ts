@@ -17,7 +17,7 @@ import {
 } from '../link/protocol'
 import type { Transport } from '../link/transport'
 import { KEYS, loadJSON, saveJSON } from '../platform/storage'
-import { isUrgent, pushInterval, uplink } from './cloudUplink'
+import { isUrgent, publishEndpoint, pushInterval, uplink } from './cloudUplink'
 
 /**
  * The child device's agent.
@@ -123,6 +123,8 @@ export class ChildAgent {
   /** Latest native visit tally; replaced wholesale each tick. */
   private visits: NativeVisit[] = []
   private lastUsagePush = 0
+  /** Today's report, so the cloud push sends the same figures the radio did. */
+  private lastUsageReport?: UsageReport
   /** When the last routine cloud push happened, to pace the next one. */
   private lastCloudPush = 0
   /**
@@ -156,6 +158,9 @@ export class ChildAgent {
       if (s.state === 'connected' && !this.helloSent) void this.sayHello()
       if (s.state !== 'connected') this.helloSent = false
     })
+
+    // Hand the native uploader its address before anything else needs it.
+    await publishEndpoint()
 
     await this.transport.start()
     await this.record('agent-start')
@@ -354,8 +359,19 @@ export class ChildAgent {
    * than a history: resending today's totals is correct, whereas resending an
    * arrival is not.
    */
+  /**
+   * Builds today's usage report, and sends it wherever it can go.
+   *
+   * The build used to sit behind `if (transport connected) return`, so a phone
+   * with no parent nearby never even *assembled* a report — which is why the
+   * web dashboard showed "—" for screen time no matter how long the child had
+   * been on their phone. Assembling is cheap and has nothing to do with the
+   * radio; only the sending does.
+   *
+   * Kept on the instance so the cloud push can carry the same report rather
+   * than asking Android for the figures a second time a few milliseconds later.
+   */
   private async pushUsage() {
-    if (this.transport.status().state !== 'connected') return
     if (Date.now() - this.lastUsagePush < 60_000) return
     this.lastUsagePush = Date.now()
 
@@ -377,7 +393,7 @@ export class ChildAgent {
     }
     this.emit({ usageAccess })
 
-    await this.transport.send({
+    const report: UsageReport = {
       t: 'usage',
       day: localDay(),
       apps,
@@ -390,7 +406,14 @@ export class ChildAgent {
       })),
       usageAccess,
       filterOn: this.snapshot.filterRunning,
-    })
+    }
+    this.lastUsageReport = report
+
+    // The radio is optional here. The report exists either way, and the cloud
+    // push picks it up on its own cadence.
+    if (this.transport.status().state === 'connected') {
+      await this.transport.send(report)
+    }
   }
 
   /* ------------------------------------------------------------- location */
@@ -675,6 +698,10 @@ export class ChildAgent {
         locked: this.snapshot.locked,
       },
       events: this.state.log.slice(0, 40),
+      // Usage was built, stored and shown over Bluetooth, and never sent here —
+      // so the web report had nothing to draw and Screen time read "—" for
+      // every family that had not paired a phone that day.
+      usage: this.lastUsageReport ?? undefined,
     })
 
     // A rule changed while this phone was out of Bluetooth range for days.

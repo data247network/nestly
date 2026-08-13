@@ -1,5 +1,5 @@
 import { Network } from '@capacitor/network'
-import { KEYS, loadJSON } from '../platform/storage'
+import { KEYS, loadJSON, saveJSON } from '../platform/storage'
 import type { ChildEvent, Telemetry, UsageReport } from '../link/protocol'
 
 /**
@@ -27,6 +27,19 @@ import type { ChildEvent, Telemetry, UsageReport } from '../link/protocol'
  */
 
 const ENDPOINT = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/child-sync`
+
+/**
+ * Publishes the endpoint for the native uploader.
+ *
+ * The service that keeps uploading while the app is closed is written in Java
+ * and cannot see a build-time constant, so the address is handed over through
+ * storage. Written on every agent start rather than once, so a rebuild pointing
+ * at a different project corrects itself instead of stranding the phone on an
+ * address nobody serves any more.
+ */
+export async function publishEndpoint(): Promise<void> {
+  await saveJSON(KEYS.cloudEndpoint, ENDPOINT)
+}
 
 /** Routine position and battery. Frequent enough to be useful, not constant. */
 export const TELEMETRY_INTERVAL_MS = 60_000

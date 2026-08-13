@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 
 import androidx.core.app.NotificationCompat;
@@ -27,6 +29,38 @@ import androidx.core.app.NotificationCompat;
  * running, which is the same promise the transparency screen makes.
  */
 public class NestlyForegroundService extends Service {
+
+    /**
+     * The cloud uploader lives here rather than in the WebView.
+     *
+     * A WebView's timers are throttled the moment the app leaves the screen and
+     * stop once the process goes idle, so the JavaScript agent only ever
+     * uploaded in the seconds after someone opened the app. This service is
+     * already kept alive for BLE and location, which makes it the one place on
+     * a child's phone that reliably gets to run.
+     *
+     * Its own thread: the work is a blocking HTTP request, and the main thread
+     * is where the notification and the rest of the app live.
+     */
+    private HandlerThread uploadThread;
+    private Handler uploadHandler;
+
+    private final Runnable uploadTick = new Runnable() {
+        @Override
+        public void run() {
+            int battery = -1;
+            try {
+                battery = NestlyCloudUploader.runOnce(getApplicationContext());
+            } catch (Throwable t) {
+                // Never let an upload take the service down with it. The child
+                // being supervised does not depend on the cloud, and a crash
+                // loop here would stop BLE and location too.
+            }
+            if (uploadHandler != null) {
+                uploadHandler.postDelayed(this, NestlyCloudUploader.intervalFor(battery));
+            }
+        }
+    };
 
     public static final String CHANNEL_ID = "nestly_agent";
     public static final int NOTIFICATION_ID = 1001;
@@ -55,6 +89,7 @@ public class NestlyForegroundService extends Service {
 
         createChannel();
         Notification notification = buildNotification(text);
+        startUploads();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             // Android 14 rejects a foreground service whose declared type does
@@ -73,6 +108,27 @@ public class NestlyForegroundService extends Service {
         // worse than one that never started, because the parent sees stale data
         // and assumes it is current.
         return START_STICKY;
+    }
+
+    /** Idempotent: onStartCommand runs again on every restart and re-delivery. */
+    private void startUploads() {
+        if (uploadThread != null) return;
+        uploadThread = new HandlerThread("nestly-upload");
+        uploadThread.start();
+        uploadHandler = new Handler(uploadThread.getLooper());
+        // Immediately, then on its own cadence. The first run matters most:
+        // it is the one that catches up whatever accumulated while the phone
+        // was asleep.
+        uploadHandler.post(uploadTick);
+    }
+
+    @Override
+    public void onDestroy() {
+        if (uploadHandler != null) uploadHandler.removeCallbacksAndMessages(null);
+        if (uploadThread != null) uploadThread.quitSafely();
+        uploadHandler = null;
+        uploadThread = null;
+        super.onDestroy();
     }
 
     private void createChannel() {
