@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { VersionRow } from '../app/VersionRow'
 import { useDevice } from '../platform/device'
 import { LinkBadge, ago } from './setup'
 import { FamilyHub } from './hub'
@@ -611,6 +612,10 @@ export function ChildNotice() {
             ? `${contacts.map((c) => c.name).join(', ')} — these work even when your phone is paused.`
             : 'Your parent has not added any emergency numbers yet. Ask them to.'}
         </div>
+      </div>
+
+      <div className="mt-2">
+        <VersionRow />
       </div>
 
       <div className="mt-2">

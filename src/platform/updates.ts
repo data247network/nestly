@@ -57,6 +57,30 @@ export function updatesSupported(): boolean {
 }
 
 /**
+ * What is actually installed on this phone.
+ *
+ * Read from the package rather than from the bundle constant, because the two
+ * can disagree: `__APP_VERSION__` is baked in at build time and describes the
+ * web assets, while `versionCode` is what Android compares when deciding
+ * whether an update may be installed. When someone is asking "am I on the
+ * latest?", the package is the honest answer.
+ *
+ * Null off-device, where there is no package and the browser always has the
+ * current code.
+ */
+export async function installedVersion(): Promise<{
+  versionCode: number
+  versionName: string
+} | null> {
+  if (!updatesSupported()) return null
+  try {
+    return await Updater.currentVersion()
+  } catch {
+    return null
+  }
+}
+
+/**
  * Compares the installed build against the published one.
  *
  * Compares `versionCode`, never `versionName`. The name is for humans and can

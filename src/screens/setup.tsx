@@ -3,6 +3,7 @@ import { useDevice } from '../platform/device'
 import { useStore } from '../app/store'
 import { childCapacity, pairingBlockedReason } from '../app/plans'
 import { releasePush } from '../app/PushBridge'
+import { VersionRow } from '../app/VersionRow'
 import type { Peer } from '../link/transport'
 import { Scene } from '../art/Scene'
 import {
@@ -305,6 +306,8 @@ export function PairChild({ onDone }: { onDone?: () => void }) {
           hint={`${capacity.plan.name} · ${capacity.used} of ${capacity.limit} children`}
           onClick={() => go('plans')}
         />
+
+        <VersionRow />
 
         <Row
           title="Sign out"
