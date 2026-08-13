@@ -518,6 +518,35 @@ export function ChildLock() {
 }
 
 /**
+ * A number reduced to what a dialer will actually accept.
+ *
+ * This used to be `encodeURIComponent(phone)`, which is correct for a query
+ * string and wrong for `tel:`. A stored number like "+234 801 234 5678" became
+ * `tel:%2B234%20801%20234%205678`, and Android's dialer does not decode that —
+ * it opened empty or did nothing at all. The child pressed the button on the
+ * emergency screen and no call was placed, which is the single worst way for
+ * this product to fail.
+ *
+ * RFC 3966 wants the digits and a literal leading `+`, so the fix is to strip
+ * what a dialer cannot use rather than to escape it. `*`, `#` and the `,`/`;`
+ * pause characters are kept because extensions and short codes need them; the
+ * `+` is kept only in first position, where it means "international".
+ */
+export function dialHref(phone: string): string {
+  const trimmed = phone.trim()
+  const international = trimmed.startsWith('+')
+
+  // "+44 (0)20 7946 0958" is how a UK number is conventionally written, and the
+  // bracketed zero is a trunk prefix used only when dialling domestically.
+  // Stripping brackets blindly leaves +44020…, which does not connect. Removed
+  // only for international numbers, where it is unambiguously the trunk code.
+  const withoutTrunk = international ? trimmed.replace(/\(\s*0\s*\)/, '') : trimmed
+
+  const rest = (international ? withoutTrunk.slice(1) : withoutTrunk).replace(/[^0-9*#,;]/g, '')
+  return `tel:${international ? '+' : ''}${rest}`
+}
+
+/**
  * A plain `tel:` anchor rather than a scripted call.
  *
  * Capacitor's WebView hands non-http schemes to the system, so this opens the
@@ -528,7 +557,7 @@ export function ChildLock() {
 function CallButton({ name, phone }: { name: string; phone: string }) {
   return (
     <a
-      href={`tel:${encodeURIComponent(phone)}`}
+      href={dialHref(phone)}
       className="flex items-center gap-3 rounded-2xl bg-mint px-4 py-3 text-left text-ink transition active:scale-[0.98]"
     >
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden>
