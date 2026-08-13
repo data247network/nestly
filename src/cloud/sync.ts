@@ -833,11 +833,11 @@ export async function loadPlanPrices(): Promise<Record<string, CurrencyPrice[]>>
  * sells a subscription that renews until cancelled, OPay sells a fixed period
  * that runs out. Anything showing a price has to say which of those it is.
  */
-export type PayProvider = 'opay' | 'stripe'
+export type PayProvider = 'paystack' | 'stripe'
 
 export const PROVIDER_CURRENCY: Record<PayProvider, string> = {
   stripe: 'GBP',
-  opay: 'NGN',
+  paystack: 'NGN',
 }
 
 export async function startCheckout(

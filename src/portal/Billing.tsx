@@ -380,14 +380,14 @@ export function Billing({
                           <button
                             type="button"
                             disabled={payingPlan !== null}
-                            onClick={() => void pay('opay', p.id)}
+                            onClick={() => void pay('paystack', p.id)}
                             className={`block w-full rounded-xl px-3 py-2.5 text-center text-[12.5px] font-bold disabled:opacity-50 ${
                               gbpAmount > 0
                                 ? 'border border-line text-brand'
                                 : 'bg-brand text-white'
                             }`}
                           >
-                            {busyWith('opay')
+                            {busyWith('paystack')
                               ? 'Opening checkout…'
                               : `Pay ${formatPrice(ngnAmount, 'NGN')} in naira`}
                           </button>
