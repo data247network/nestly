@@ -41,8 +41,8 @@ Both test phones (Galaxy A54 parent, A12 child) run **v1.6 / versionCode 7**.
 | `enroll-child` | the invite code itself — a child has no account |
 | `child-sync` | the child's `device_secret` from enrolment |
 | `admin-api` | caller's JWT, then membership of `admin_users`, re-read per request |
-| `opay-checkout` | caller's JWT + household membership |
-| `opay-webhook` | HMAC-SHA3-512 signature over OPay's exact field ordering |
+| `paystack-checkout` | caller's JWT + household membership |
+| `paystack-webhook` | HMAC-SHA512 of the raw body, keyed with the secret API key |
 | `stripe-checkout` | caller's JWT + household membership |
 | `stripe-portal` | caller's JWT + household membership |
 | `stripe-webhook` | HMAC-SHA256 over `timestamp.rawBody`, per Stripe's scheme |
@@ -96,16 +96,58 @@ Three properties worth knowing before changing it:
 Two providers, and they are **not** interchangeable — the difference reaches the
 customer, so the plan cards say which is which before anyone pays.
 
-| | Stripe | OPay |
+| | Stripe | Paystack |
 |---|---|---|
 | Currency | GBP | NGN |
 | Sells | a subscription that renews until cancelled | one fixed period, paid up front |
 | Cancel | Stripe Billing Portal, via `stripe-portal` | nothing to cancel; it runs out |
 
+**OPay is gone.** It routes by the merchant's *registered business country*, and
+that account is registered in Egypt, so every naira request came back as
+`request forbidden(request domain error.)`. No value of `country`, `currency` or
+host fixes that — an Egypt account settles in EGP. Paystack is Nigerian and
+takes NGN natively. The deployed `opay-*` functions are unreferenced and can be
+deleted from the dashboard; no OPay payment ever succeeded.
+
+Paystack has **no separate webhook signing secret**: `x-paystack-signature` is
+HMAC-SHA512 of the raw body keyed with `PAYSTACK_SECRET_KEY`. One less secret,
+and one more reason that key must never reach a client.
+
 `Billing.tsx` shows a pay button per currency a plan is priced in, pounds first,
 because pounds are what the card headline quotes. It used to hardcode
 `startCheckout('opay', …)` and gate the button on an NGN price, which is why
 Premium once read "No price set yet" while being priced at £7.99.
+
+## Which link wins
+
+The parent app now treats **the internet as primary and Bluetooth as the
+fallback**, which is the opposite of what the code originally assumed and is a
+product decision rather than an engineering one. Bluetooth reports every 15s
+against the cloud's 60s, so the radio is genuinely fresher — but only ever when
+the two phones are in the same room, which is the one situation where a parent
+does not need a map. `preferredFix` in `src/screens/parent.tsx` is where that
+choice lives.
+
+The offline promise is untouched: with no signal Bluetooth still carries
+everything. It just stops overriding a server that has an answer.
+
+`useCloudChildren` polls every 15s underneath the realtime socket, paused while
+the app is off screen. Realtime is the fast path but not a guarantee — a
+websocket that drops when a phone changes network reconnects silently and the
+screen simply stops updating with nothing on it to say so.
+
+**The gap that remains:** `activity.tsx`, `report.tsx` and `hub.tsx` render from
+`state.alerts`, `state.activity` and `state.usageByChild`, which are store
+fields written only by the Bluetooth link. They are not per-screen bugs — the
+fix is to hydrate those fields from the cloud, which means touching the reducer
+the whole offline product runs on. Do it deliberately, not in passing.
+
+Both webhooks name their rejection reason in the logs (`digest-mismatch`,
+`stale`, `no-header`). That exists because a genuine Stripe delivery was
+rejected for a day and the log said only "Rejected" — a wrong secret, clock skew
+and something-that-is-not-Stripe are three unrelated faults with three unrelated
+fixes. `digest-mismatch` nearly always means the secret is from the wrong mode
+or the wrong endpoint.
 
 Things to know before changing the Stripe half:
 
