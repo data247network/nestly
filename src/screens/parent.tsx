@@ -3,6 +3,7 @@ import { Geolocation } from '@capacitor/geolocation'
 import { describeSchedule, fmtDuration, useStore } from '../app/store'
 import { useDevice } from '../platform/device'
 import { useCloudChildren } from '../app/CloudWatch'
+import type { CloudChild } from '../cloud/sync'
 import { Scene } from '../art/Scene'
 import { LinkBadge, ago } from './setup'
 import { RecentActivity, Segments } from './activity'
@@ -221,12 +222,59 @@ function greeting() {
 
 /* --------------------------------------------------------------- map/zones */
 
+/**
+ * The newer of two positions, either of which may be absent.
+ *
+ * Transport-agnostic on purpose: a fix is a fix, and the only thing that makes
+ * one better than another is being more recent.
+ */
+function fresher(a: Fix | null, b: Fix | null): Fix | null {
+  if (!a) return b
+  if (!b) return a
+  return b.ts > a.ts ? b : a
+}
+
+/**
+ * The cloud record for the phone currently being viewed.
+ *
+ * Falls back to the only enrolled child when the Bluetooth pairing has not been
+ * bound to a cloud id yet — a household with one child is the common case, and
+ * showing their position beats showing none over a bookkeeping gap. With
+ * several children it returns nothing rather than guess, because the wrong
+ * child's location on a map is worse than an empty one.
+ */
+function matchingCloudChild(
+  children: CloudChild[] | undefined,
+  cloudChildId: string | null | undefined,
+): CloudChild | null {
+  const list = children ?? []
+  if (cloudChildId) return list.find((c) => c.id === cloudChildId) ?? null
+  const enrolled = list.filter((c) => c.enrolledAt)
+  return enrolled.length === 1 ? enrolled[0] : null
+}
+
 export function MapZones() {
   const { state, go, dispatch, activeChild } = useStore()
   const { child } = useDevice()
+  const { household: remote } = useCloudChildren()
   const fences = state.geofences
-  const fix = child?.telemetry?.fix ?? null
   const who = activeChild?.name ?? 'your child'
+
+  // Whichever position is actually newer, not whichever arrived by the
+  // preferred road.
+  //
+  // This screen used to read the Bluetooth link and nothing else, which meant
+  // the one time a parent most needs the map — child out of range — was the one
+  // time it said "No position yet", while the server had a fix from a minute
+  // ago. The child device uploads on its own; nothing was reading it back.
+  //
+  // A fixed order of preference would be wrong in one direction or the other.
+  // Bluetooth reports every 15s and the cloud every 60s, so preferring the
+  // internet outright would show a staler position whenever the phones are
+  // together. Comparing timestamps gets both cases right and needs no rule
+  // about which transport is "primary".
+  const cloudFix = matchingCloudChild(remote?.children, child?.cloudChildId)?.fix ?? null
+  const fix = fresher(child?.telemetry?.fix ?? null, cloudFix)
 
   return (
     <div className="flex h-full flex-col">

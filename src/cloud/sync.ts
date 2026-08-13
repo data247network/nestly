@@ -1,6 +1,6 @@
 import { hasCloud, supabase } from './client'
 import { KEYS } from '../platform/storage'
-import type { ChildEvent, Policy, Telemetry } from '../link/protocol'
+import type { ChildEvent, Fix, Policy, Telemetry } from '../link/protocol'
 
 /**
  * The cloud half of the link.
@@ -217,6 +217,17 @@ export type CloudChild = {
   avatar: string
   enrolledAt: string | null
   deviceId: string | null
+  /**
+   * Where the child was, as last uploaded over the internet.
+   *
+   * This was missing entirely, and its absence was invisible: the map read the
+   * Bluetooth link only, so a child out of range showed "No position yet" while
+   * the server had a fix from a minute ago. `child_telemetry` had carried
+   * coordinates since the beginning — nothing had ever read them back.
+   */
+  fix: Fix | null
+  /** When the device last reported to the server, fix or not. */
+  lastSeenAt: string | null
 }
 
 export type HouseholdSummary = {
@@ -233,9 +244,14 @@ export async function loadHousehold(householdId: string): Promise<HouseholdSumma
 
   const [{ data: house }, { data: kids }, { count }] = await Promise.all([
     db.from('households').select('id, name, plan').eq('id', householdId).maybeSingle(),
+    // Telemetry is embedded rather than fetched separately: it is one row per
+    // child by primary key, and a second round trip would let the two answers
+    // disagree about which children exist.
     db
       .from('children')
-      .select('id, name, avatar, enrolled_at, device_id')
+      .select(
+        'id, name, avatar, enrolled_at, device_id, child_telemetry(lat, lng, accuracy_m, ts, updated_at)',
+      )
       .eq('household_id', householdId)
       .order('name'),
     db
@@ -250,13 +266,36 @@ export async function loadHousehold(householdId: string): Promise<HouseholdSumma
     name: house.name as string,
     plan: (house.plan as string) ?? 'free',
     memberCount: count ?? 1,
-    children: (kids ?? []).map((k) => ({
-      id: k.id as string,
-      name: k.name as string,
-      avatar: (k.avatar as string) ?? '#147D77',
-      enrolledAt: (k.enrolled_at as string) ?? null,
-      deviceId: (k.device_id as string) ?? null,
-    })),
+    children: (kids ?? []).map((k) => {
+      // PostgREST returns an embedded one-to-one as an object, but as an array
+      // when it cannot prove the relationship is unique. Both are handled so a
+      // schema change cannot quietly turn every location back into null.
+      const raw = (k as Record<string, unknown>).child_telemetry
+      const t = (Array.isArray(raw) ? raw[0] : raw) as
+        | { lat?: number; lng?: number; accuracy_m?: number; ts?: string; updated_at?: string }
+        | null
+        | undefined
+
+      return {
+        id: k.id as string,
+        name: k.name as string,
+        avatar: (k.avatar as string) ?? '#147D77',
+        enrolledAt: (k.enrolled_at as string) ?? null,
+        deviceId: (k.device_id as string) ?? null,
+        fix:
+          t && typeof t.lat === 'number' && typeof t.lng === 'number'
+            ? {
+                lat: t.lat,
+                lng: t.lng,
+                acc: Number(t.accuracy_m ?? 0),
+                // The device's own clock reading, not when the row was written,
+                // so freshness comparisons against Bluetooth are like for like.
+                ts: new Date(t.ts ?? t.updated_at ?? Date.now()).getTime(),
+              }
+            : null,
+        lastSeenAt: (t?.updated_at as string) ?? null,
+      }
+    }),
   }
 }
 
