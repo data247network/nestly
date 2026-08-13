@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import { currentSession, pushEvents, pushPolicy, pushTelemetry } from '../cloud/sync'
 import { HOUSEHOLD_KEY } from '../screens/login'
@@ -26,7 +26,16 @@ export function CloudBridge() {
   /** Supabase child uuid, keyed by the BLE pairing id the app uses. */
   const childIds = useRef(new Map<string, string>())
   const householdId = useRef<string | null>(null)
-  const ready = useRef(false)
+  /**
+   * State, not a ref.
+   *
+   * As a ref, becoming ready mutated nothing React could see, so the effect
+   * below only re-ran if the policy happened to change again afterwards. A
+   * parent who unlocked a phone before the session had resolved published that
+   * unlock to Bluetooth and never to the server — and with the child out of
+   * range, nothing else would ever send it.
+   */
+  const [ready, setReady] = useState(false)
   const lastPolicy = useRef(-1)
 
   // Resolve the household once per session. Without a signed-in user every
@@ -38,7 +47,7 @@ export function CloudBridge() {
       const session = await currentSession()
       if (cancelled || !session) return
       householdId.current = await loadJSON<string | null>(HOUSEHOLD_KEY, null)
-      ready.current = householdId.current != null
+      setReady(householdId.current != null)
     })()
     return () => {
       cancelled = true
@@ -69,7 +78,7 @@ export function CloudBridge() {
   // Policy up, whenever the version the child enforces changes.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
-    if (!ready.current || !householdId.current) return
+    if (!ready || !householdId.current) return
     if (state.policyVersion === lastPolicy.current) return
     lastPolicy.current = state.policyVersion
 
@@ -83,7 +92,7 @@ export function CloudBridge() {
         }
       }
     })()
-  }, [role, state, pairings])
+  }, [role, ready, state, pairings])
 
   // Events up, as they arrive from the child device.
   useEffect(() => {

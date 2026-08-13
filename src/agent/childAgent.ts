@@ -677,9 +677,15 @@ export class ChildAgent {
       events: this.state.log.slice(0, 40),
     })
 
-    // A rule changed while this phone was out of Bluetooth range for days. The
-    // same version guard the radio path uses applies: only move forwards.
-    if (res.ok && res.policy && (res.policyVersion ?? 0) > (this.state.policy?.version ?? 0)) {
+    // A rule changed while this phone was out of Bluetooth range for days.
+    //
+    // The gate matches the radio path's `>=` rather than being stricter than
+    // it. Requiring strictly newer sounds safer and is not: both transports
+    // share one version counter, so a policy that reached the radio but never
+    // reached the server left the cloud copy at a version this would refuse for
+    // ever — and a phone locked over Bluetooth could never be unlocked over the
+    // internet, no matter how long it sat there with a signal.
+    if (res.ok && res.policy && (res.policyVersion ?? 0) >= (this.state.policy?.version ?? 0)) {
       // Fed through the same handler the radio uses, so the version guard,
       // scenario re-evaluation, persistence and filter restart all happen
       // exactly once, in one place.
@@ -711,6 +717,7 @@ export class ChildAgent {
     if (msg.t === 'policy') {
       const incoming = msg
       const current = this.state.policy?.version ?? -1
+
       if (incoming.version >= current) {
         this.state.policy = incoming
         this.evaluateScenarios(new Date())
@@ -718,7 +725,15 @@ export class ChildAgent {
         await this.persist()
         // New rules take effect immediately, not on the next tick.
         await this.applyFilter()
+        return
       }
+
+      // An older policy is ignored, including one that would unlock. That is
+      // deliberate and tested: a stale resend must not be a way out of a lock,
+      // or the lock is defeatable by anyone who can cause a replay. The route
+      // out of a stuck lock is the parent publishing a *newer* policy, which
+      // both transports now carry — see the `>=` gate in `pushCloud` and the
+      // republish-on-ready in CloudBridge.
       return
     }
 

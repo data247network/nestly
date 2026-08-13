@@ -267,6 +267,35 @@ describe('parent <-> child link', () => {
     expect(events).toHaveLength(afterFirst)
   })
 
+  it('accepts a policy at the same version from the cloud, which is how a lock is lifted', async () => {
+    // The radio path applies `version >= current` and the cloud path used to
+    // require strictly greater. Both transports share one version counter, so
+    // that asymmetry stranded a phone locked over Bluetooth: the server's copy
+    // sat at a version the child refused for ever, and no amount of signal
+    // would unlock it.
+    const { parent, child } = pair()
+    const link = track(new ParentLink(parent, { onChild: () => {}, onEvents: () => {} }))
+    const agent = track(new ChildAgent(child, { deviceId: 'c', name: 'child' }))
+    await link.start()
+    await agent.start()
+
+    await link.setPolicy({ ...policyWithZone(5), lockNow: true })
+    await settle()
+    await agent.tick()
+    await settle()
+    expect(agent.current().locked).toBe(true)
+
+    // Same version, lock lifted — the shape of a correction arriving by the
+    // other road rather than a stale replay.
+    await link.setPolicy({ ...policyWithZone(5), lockNow: false })
+    await settle()
+    await agent.tick()
+    await settle()
+
+    expect(agent.current().locked).toBe(false)
+    expect(agent.current().policyVersion).toBe(5)
+  })
+
   it('ignores a policy older than the one the child already has', async () => {
     const { parent, child } = pair()
     const link = track(new ParentLink(parent, { onChild: () => {}, onEvents: () => {} }))
