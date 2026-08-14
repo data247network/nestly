@@ -9,14 +9,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2"
  * missing is that the parent had to open Nestly to find out. A zone exit at 3pm
  * read at 6pm is not an alert, it is a log entry.
  *
- * Given a child, this looks for events nobody has been told about, claims them,
- * and pushes one notification per event to every phone in that household.
+ * Given a child, this looks for **events and notes** nobody has been told about,
+ * claims them, and pushes one notification each to every phone in that
+ * household. Notes were the later addition and are treated as messages rather
+ * than alerts — their own channel, stacking rather than replacing — because a
+ * child writing to their parent and a child leaving school are not the same
+ * kind of interruption, and a parent must be able to silence one without losing
+ * the other.
  *
  * NOT a general-purpose sender. It takes a child id and works out for itself
  * what is worth sending and to whom — a caller cannot name a recipient, choose
  * the text, or push something that did not happen. That is deliberate: this is
  * the one function whose whole job is to make a stranger's phone make a noise,
- * so the set of things it can be made to say is fixed here.
+ * so the set of things it can be made to say is fixed here. A note is the one
+ * thing whose text a caller does influence, and only by having written it into
+ * the thread as that child.
  *
  * Internal only. `verify_jwt` is off, as everywhere else in this project, and
  * the function authenticates the caller itself — against the service role key,
@@ -63,6 +70,24 @@ const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token"
 /** Must match ALERT_CHANNEL_ID in src/platform/push.ts and the manifest. */
 const CHANNEL_ID = "nestly-alerts"
 
+/**
+ * Notes get their own channel. Must match NOTE_CHANNEL_ID in
+ * src/platform/push.ts.
+ *
+ * A separate channel rather than reusing the alerts one, because Android's
+ * channels are the only place a person can say "buzz me for this, not for
+ * that", and "my child wrote to me" and "protection was switched off" are not
+ * the same request. A parent who silences one should not lose the other.
+ *
+ * Safe to send to: a handset only has a push token because `startPush` ran, and
+ * that creates both channels before it registers. There is no window where this
+ * id arrives at a phone that has never heard of it.
+ */
+const NOTE_CHANNEL_ID = "nestly-notes"
+
+/** Notes are shown as written; a novel in the shade helps nobody. */
+const MAX_NOTE_BODY = 240
+
 type ServiceAccount = {
   project_id: string
   client_email: string
@@ -74,6 +99,14 @@ type PendingEvent = {
   id: number
   kind: string
   ref: string | null
+  ts: string
+}
+
+type PendingNote = {
+  id: string
+  /** The sender's own id. What the app files the note under, so a tap can find it. */
+  client_id: string
+  body: string
   ts: string
 }
 
@@ -194,14 +227,29 @@ function describe(kind: string, ref: string | null): string | null {
 
 type SendOutcome = "sent" | "dead" | "failed"
 
+/**
+ * One thing to put on a phone's screen.
+ *
+ * Assembled by the caller rather than derived here, because the two things this
+ * function now sends differ in every field that matters: an alert replaces the
+ * previous one of its kind, a note must stack alongside the last one, and they
+ * belong on different channels.
+ */
+type Push = {
+  title: string
+  body: string
+  channelId: string
+  /** One live notification per tag; a repeat replaces rather than stacks. */
+  tag: string
+  /** Strings only — FCM rejects anything else in `data`. */
+  data: Record<string, string>
+}
+
 async function sendOne(
   bearer: string,
   projectId: string,
   token: string,
-  childId: string,
-  childName: string,
-  event: PendingEvent,
-  body: string,
+  push: Push,
 ): Promise<SendOutcome> {
   const res = await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
     method: "POST",
@@ -209,7 +257,7 @@ async function sendOne(
     body: JSON.stringify({
       message: {
         token,
-        notification: { title: childName, body },
+        notification: { title: push.title, body: push.body },
         android: {
           // Wakes a dozing phone. Normal priority is batched by Android until
           // the device next comes out of Doze, which for an overnight tamper
@@ -218,24 +266,14 @@ async function sendOne(
           notification: {
             // Without this the system files the alert under a channel it
             // invents, which is silent from Android 8 onward.
-            channel_id: CHANNEL_ID,
+            channel_id: push.channelId,
             notification_priority: "PRIORITY_MAX",
             default_sound: true,
             default_vibrate_timings: true,
-            // One live notification per child per kind. A second "left Home"
-            // replaces the first rather than stacking, but a tamper alert never
-            // displaces a zone alert.
-            tag: `${childId}-${event.kind}`,
+            tag: push.tag,
           },
         },
-        // Strings only — FCM rejects anything else in `data`.
-        data: {
-          kind: event.kind,
-          childId,
-          eventId: String(event.id),
-          title: childName,
-          body,
-        },
+        data: { ...push.data, title: push.title, body: push.body },
       },
     }),
   })
@@ -319,6 +357,12 @@ Deno.serve(async (req: Request) => {
   // events with nobody to send them to. `notified_at` means "this has been
   // through the notifier", which keeps the pending index empty rather than
   // letting a household that never registered a phone accumulate for ever.
+  const stamp = new Date().toISOString()
+  const childName = (child.name as string) || "Your child"
+  let claimedCount = 0
+
+  /* ----------------------------------------------------------- events -- */
+
   const { data: candidates } = await admin
     .from("child_events")
     .select("id")
@@ -329,25 +373,106 @@ Deno.serve(async (req: Request) => {
     .limit(MAX_CLAIM)
 
   const ids = (candidates ?? []).map((row) => row.id as number)
-  if (ids.length === 0) return json({ ok: true, claimed: 0, sent: 0 })
+  let events: PendingEvent[] = []
 
-  const { data: claimed, error: claimError } = await admin
-    .from("child_events")
-    .update({ notified_at: new Date().toISOString() })
-    .in("id", ids)
+  if (ids.length > 0) {
+    const { data: claimed, error: claimError } = await admin
+      .from("child_events")
+      .update({ notified_at: stamp })
+      .in("id", ids)
+      .is("notified_at", null)
+      .select("id, kind, ref, ts")
+
+    if (claimError) return json({ error: "Could not claim events." }, 500)
+    claimedCount += ids.length
+
+    events = ((claimed ?? []) as PendingEvent[])
+      .filter((e) => Date.now() - new Date(e.ts).getTime() <= MAX_AGE_MS)
+      .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+      .slice(0, MAX_PER_CALL)
+      // Oldest first, so the newest alert ends up on top of the shade.
+      .reverse()
+  }
+
+  /* ------------------------------------------------------------ notes -- */
+  //
+  // Claimed exactly like events, for exactly the same reason: a note is resent
+  // until acknowledged, so arrival tells you nothing about whether it is new.
+  //
+  // Only the child's notes. The parent's own go the other way, to a phone that
+  // has no token registered — deliberately, since pushing to the child device
+  // would tell a child what their parent has just been told.
+
+  const { data: noteCandidates } = await admin
+    .from("notes")
+    .select("id")
+    .eq("child_id", childId)
+    .eq("sender", "child")
     .is("notified_at", null)
-    .select("id, kind, ref, ts")
+    .order("ts", { ascending: false })
+    .limit(MAX_CLAIM)
 
-  if (claimError) return json({ error: "Could not claim events." }, 500)
+  const noteIds = (noteCandidates ?? []).map((row) => row.id as string)
+  let notes: PendingNote[] = []
 
-  const events = ((claimed ?? []) as PendingEvent[])
-    .filter((e) => Date.now() - new Date(e.ts).getTime() <= MAX_AGE_MS)
-    .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
-    .slice(0, MAX_PER_CALL)
-    // Oldest first, so the newest alert ends up on top of the shade.
-    .reverse()
+  if (noteIds.length > 0) {
+    const { data: claimedNotes, error: noteError } = await admin
+      .from("notes")
+      .update({ notified_at: stamp })
+      .in("id", noteIds)
+      .is("notified_at", null)
+      .select("id, client_id, body, ts")
 
-  if (events.length === 0) return json({ ok: true, claimed: ids.length, sent: 0 })
+    if (noteError) return json({ error: "Could not claim notes." }, 500)
+    claimedCount += noteIds.length
+
+    notes = ((claimedNotes ?? []) as PendingNote[])
+      // The same staleness rule as alerts. A phone that has been in a bag all
+      // afternoon flushes its backlog on reconnect, and six notifications about
+      // a conversation that is over is how a parent learns to mute the app.
+      .filter((n) => Date.now() - new Date(n.ts).getTime() <= MAX_AGE_MS)
+      .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+      .slice(0, MAX_PER_CALL)
+      .reverse()
+  }
+
+  /* ------------------------------------------------------- what to send */
+
+  const pushes: Push[] = []
+
+  for (const event of events) {
+    const body = describe(event.kind, event.ref)
+    if (!body) continue
+    pushes.push({
+      title: childName,
+      body,
+      channelId: CHANNEL_ID,
+      // One live notification per child per kind. A second "left Home" replaces
+      // the first rather than stacking, but a tamper alert never displaces a
+      // zone alert.
+      tag: `${childId}-${event.kind}`,
+      data: { kind: event.kind, childId, eventId: String(event.id) },
+    })
+  }
+
+  for (const note of notes) {
+    const body = String(note.body ?? "").trim()
+    if (!body) continue
+    pushes.push({
+      // Named as a message rather than as an alert, because that is what it is:
+      // a parent glancing at the shade should be able to tell their child
+      // writing to them from their child leaving school.
+      title: `${childName} left a note`,
+      body: body.length > MAX_NOTE_BODY ? `${body.slice(0, MAX_NOTE_BODY - 1)}…` : body,
+      channelId: NOTE_CHANNEL_ID,
+      // Per note, not per child: two notes are two things somebody said, and
+      // collapsing them would hide the first one unread.
+      tag: `${childId}-note-${note.client_id}`,
+      data: { kind: "note", childId, noteId: note.client_id },
+    })
+  }
+
+  if (pushes.length === 0) return json({ ok: true, claimed: claimedCount, sent: 0 })
 
   // Every adult on the account, not just the one who set the child up. A second
   // parent who hears nothing about a tamper alert is the case this exists for.
@@ -357,7 +482,7 @@ Deno.serve(async (req: Request) => {
     .eq("household_id", child.household_id)
 
   const userIds = (members ?? []).map((m) => m.user_id as string)
-  if (userIds.length === 0) return json({ ok: true, claimed: ids.length, sent: 0 })
+  if (userIds.length === 0) return json({ ok: true, claimed: claimedCount, sent: 0 })
 
   const { data: tokens } = await admin
     .from("device_tokens")
@@ -365,32 +490,28 @@ Deno.serve(async (req: Request) => {
     .in("user_id", userIds)
 
   const targets = (tokens ?? []).map((t) => t.token as string)
-  if (targets.length === 0) return json({ ok: true, claimed: ids.length, sent: 0 })
+  if (targets.length === 0) return json({ ok: true, claimed: claimedCount, sent: 0 })
 
   let bearer: string
   try {
     bearer = await accessToken(sa)
   } catch (e) {
-    // The events stay claimed. Re-sending a stale batch after a credentials
+    // The rows stay claimed. Re-sending a stale batch after a credentials
     // outage would buzz a parent about a walk home that finished an hour ago.
     console.error("push-notify: could not mint an FCM token —", e)
     return json({ error: "Could not authenticate with Firebase." }, 502)
   }
 
-  const childName = (child.name as string) || "Your child"
   const dead = new Set<string>()
   let sent = 0
 
-  for (const event of events) {
-    const body = describe(event.kind, event.ref)
-    if (!body) continue
-
+  for (const push of pushes) {
     const outcomes = await Promise.all(
       targets
         .filter((t) => !dead.has(t))
         .map(async (token) => {
           try {
-            return [token, await sendOne(bearer, sa.project_id, token, childId, childName, event, body)] as const
+            return [token, await sendOne(bearer, sa.project_id, token, push)] as const
           } catch {
             return [token, "failed" as SendOutcome] as const
           }
@@ -409,5 +530,5 @@ Deno.serve(async (req: Request) => {
     await admin.from("device_tokens").delete().in("token", [...dead])
   }
 
-  return json({ ok: true, claimed: ids.length, notified: events.length, sent, pruned: dead.size })
+  return json({ ok: true, claimed: claimedCount, notified: pushes.length, sent, pruned: dead.size })
 })

@@ -905,10 +905,9 @@ function migrate(state: State): State {
  * meant to avoid.
  */
 function toAlert(e: IngestedEvent, who: string, childId: string): Alert | null {
-  const time = new Date(e.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   // Alert ids include the child: two devices both emitting seq 3 would
   // otherwise collide and React would drop one of the rows.
-  const base = { id: `ev-${childId}-${e.seq}`, who, time, ts: e.ts, childId }
+  const base = { id: `ev-${childId}-${e.seq}`, who, ts: e.ts, childId }
 
   switch (e.kind) {
     case 'zone-enter':

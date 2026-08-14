@@ -10,7 +10,8 @@ import {
 } from 'react'
 import { ChildAgent, type AgentSnapshot } from '../agent/childAgent'
 import { ParentLink, type ChildLive } from '../agent/parentLink'
-import { NoteBox, type NoteState } from '../agent/notes'
+import { NoteBox, type NoteChannel, type NoteState } from '../agent/notes'
+import { childNoteChannel } from '../agent/cloudNotes'
 import { createTransport } from '../link'
 import type { ChildEvent, Policy, UsageReport } from '../link/protocol'
 import type { LinkStatus, Peer, Transport } from '../link/transport'
@@ -107,6 +108,14 @@ type DeviceCtx = {
    * because zones are scoped per child — each device gets its own document.
    */
   pushPolicy: (build: (childId: string) => Policy) => Promise<void>
+  /**
+   * Asks a child's phone for a fresh position over Bluetooth.
+   *
+   * Resolves true only if the radio actually carried the question. The cloud
+   * half is a separate request the caller makes alongside — one of the two will
+   * reach the phone, and neither knows which.
+   */
+  requestLocate: (peerId?: string) => Promise<boolean>
   onChildEvents: (cb: (childId: string, events: ChildEvent[]) => void) => () => void
   onChildUsage: (cb: (childId: string, report: UsageReport) => void) => () => void
 
@@ -124,6 +133,25 @@ type DeviceCtx = {
   /** Notes, both roles. On a parent these carry the child they belong to. */
   notes: ChildNote[]
   sendNote: (text: string, childId?: string) => Promise<void>
+  /**
+   * Attaches, replaces or removes the internet path for one child's notes.
+   *
+   * Handed *in* rather than built here. A child device can construct its own
+   * channel — it talks to one edge function with a device secret — but the
+   * parent's runs through the Supabase client, and this file is the offline
+   * core: the whole product has to work with no account and no signal, so it
+   * does not import the cloud. `app/NotesBridge.tsx` supplies the parent's.
+   */
+  setNoteChannel: (localChildId: string, channel: NoteChannel | null) => void
+  /**
+   * Children who exist online but have never been paired over Bluetooth.
+   *
+   * Now the ordinary case: a parent enrols a phone with a code and may never
+   * pair the radio at all. Without this such a child has no note store to write
+   * into, and the Notes screen would be permanently empty for a family whose
+   * setup is otherwise complete.
+   */
+  setCloudChildren: (children: { id: string; name: string }[]) => Promise<void>
 }
 
 const Ctx = createContext<DeviceCtx | null>(null)
@@ -153,6 +181,12 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   const lastPolicyRef = useRef<((childId: string) => Policy) | null>(null)
   const agentRef = useRef<ChildAgent | null>(null)
   const childNotesRef = useRef<NoteBox | null>(null)
+  /**
+   * Note stores for children reachable only over the internet, keyed by cloud
+   * child id. Separate from `linksRef` because they have no radio behind them —
+   * there is nothing to connect, scan for or reconnect to.
+   */
+  const cloudNotesRef = useRef(new Map<string, NoteBox>())
   const eventSubs = useRef(new Set<(childId: string, e: ChildEvent[]) => void>())
   const usageSubs = useRef(new Set<(childId: string, r: UsageReport) => void>())
 
@@ -211,6 +245,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       childNotesRef.current = box
       box.onChange((n) => !cancelled && setNotes(n.map((x) => ({ ...x, childId: id }))))
       await box.start()
+      // Attached unconditionally. The channel reads the enrolment on every call
+      // and does nothing until there is one, which is right: a phone is very
+      // often enrolled long after its agent started, and gating on enrolment
+      // here would leave that phone on Bluetooth-only until the next launch.
+      box.setCloud(childNoteChannel())
 
       const a = new ChildAgent(transport, { deviceId: id, name })
       agentRef.current = a
@@ -349,9 +388,12 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
   // adding a child does not tear down the links that are already up.
   useEffect(() => {
     const links = linksRef.current
+    const cloudNotes = cloudNotesRef.current
     return () => {
       for (const entry of links.values()) void entry.stop()
       links.clear()
+      for (const box of cloudNotes.values()) void box.stop()
+      cloudNotes.clear()
     }
   }, [])
 
@@ -386,6 +428,11 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       await remove(perChild.notes(peerId))
     }
     links.clear()
+    for (const [cloudId, box] of cloudNotesRef.current) {
+      await box.stop().catch(() => {})
+      await remove(perChild.notes(cloudId))
+    }
+    cloudNotesRef.current.clear()
     await Promise.all([
       remove(KEYS.role),
       remove(KEYS.pairing),
@@ -489,13 +536,67 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
         await childNotesRef.current?.send(text)
         return
       }
-      const targets = childId
-        ? [linksRef.current.get(childId)].filter(Boolean)
-        : [...linksRef.current.values()]
-      await Promise.all(targets.map((e) => e!.notes.send(text).catch(() => {})))
+      // Paired and online-only children are both real recipients, so a note
+      // addressed to nobody in particular has to reach both sets. A parent who
+      // never paired the radio would otherwise type into a screen that quietly
+      // dropped everything.
+      const boxes = childId
+        ? [linksRef.current.get(childId)?.notes ?? cloudNotesRef.current.get(childId)].filter(
+            Boolean,
+          )
+        : [
+            ...[...linksRef.current.values()].map((e) => e.notes),
+            ...cloudNotesRef.current.values(),
+          ]
+      await Promise.all(boxes.map((b) => b!.send(text).catch(() => {})))
     },
     [role],
   )
+
+  const setNoteChannel = useCallback((localChildId: string, channel: NoteChannel | null) => {
+    const box =
+      linksRef.current.get(localChildId)?.notes ?? cloudNotesRef.current.get(localChildId)
+    box?.setCloud(channel)
+  }, [])
+
+  const setCloudChildren = useCallback(async (list: { id: string; name: string }[]) => {
+    const boxes = cloudNotesRef.current
+    const wanted = new Set(list.map((c) => c.id))
+
+    // Gone from the account, or newly paired over Bluetooth and now carried by
+    // the link's own store instead. Either way this one stops.
+    for (const [cloudId, box] of boxes) {
+      if (wanted.has(cloudId)) continue
+      boxes.delete(cloudId)
+      await box.stop().catch(() => {})
+      setNotes((prev) => prev.filter((n) => n.childId !== cloudId))
+    }
+
+    for (const child of list) {
+      if (boxes.has(child.id)) continue
+      // No transport: there is no radio to this child, and a note store without
+      // one is exactly what the internet path needs.
+      const box = new NoteBox(null, 'parent', perChild.notes(child.id))
+      boxes.set(child.id, box)
+      box.onChange((n) => {
+        setNotes((prev) => [
+          ...prev.filter((x) => x.childId !== child.id),
+          ...n.map((x) => ({ ...x, childId: child.id })),
+        ])
+      })
+      await box.start()
+    }
+  }, [])
+
+  const requestLocate = useCallback(async (peerId?: string) => {
+    const targets = peerId
+      ? [linksRef.current.get(peerId)].filter(Boolean)
+      : [...linksRef.current.values()]
+    const asked = await Promise.all(
+      targets.map((e) => e!.link?.requestLocate().catch(() => false) ?? false),
+    )
+    return asked.some(Boolean)
+  }, [])
 
   const onChildEvents = useCallback((cb: (childId: string, e: ChildEvent[]) => void) => {
     eventSubs.current.add(cb)
@@ -549,14 +650,17 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
       refresh,
       refreshing,
       pushPolicy,
+      requestLocate,
       onChildEvents,
       onChildUsage,
       agent,
       announceEnrolment,
       notes,
       sendNote,
+      setNoteChannel,
+      setCloudChildren,
     }),
-    [ready, onboarded, completeOnboarding, signedIn, signIn, signOut, role, id, name, setRole, reset, pairings, linkByChild, aggregate, childList, scan, pair, unpair, renameDevice, refresh, refreshing, pushPolicy, onChildEvents, onChildUsage, agent, announceEnrolment, notes, sendNote],
+    [ready, onboarded, completeOnboarding, signedIn, signIn, signOut, role, id, name, setRole, reset, pairings, linkByChild, aggregate, childList, scan, pair, unpair, renameDevice, refresh, refreshing, pushPolicy, requestLocate, onChildEvents, onChildUsage, agent, announceEnrolment, notes, sendNote, setNoteChannel, setCloudChildren],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

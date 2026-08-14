@@ -58,12 +58,16 @@ export function PushBridge() {
           // Deliberately silent. A parent who has turned notifications off has
           // said what they want, and the alerts feed is unaffected.
         },
-        onOpened: () => {
+        onOpened: (payload) => {
+          // A note is a message and belongs in the thread; everything else is
+          // an alert and belongs in the feed. Landing a tapped note on the
+          // alerts list would show a parent a screen their note is not on.
+          //
           // The payload names the child, but the store keys children by their
           // Bluetooth pairing rather than their cloud id, so resolving one to
-          // the other here would duplicate what CloudBridge already does. The
-          // feed carries every child's alerts and is where the tapped one is.
-          goRef.current('alerts')
+          // the other here would duplicate what CloudBridge already does. Both
+          // destinations carry every child, and the tapped one is on it.
+          goRef.current(payload.kind === 'note' ? 'hub' : 'alerts')
         },
       })
 

@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { hasCloud } from '../cloud/client'
-import { currentSession, pushEvents, pushPolicy, pushTelemetry } from '../cloud/sync'
-import { HOUSEHOLD_KEY } from '../screens/login'
-import { loadJSON } from '../platform/storage'
+import { pushEvents, pushPolicy, pushTelemetry, resolveHouseholdId } from '../cloud/sync'
 import { useDevice } from '../platform/device'
 import { buildPolicy, useStore } from './store'
 
@@ -44,10 +42,10 @@ export function CloudBridge() {
     if (!hasCloud() || role !== 'parent') return
     let cancelled = false
     void (async () => {
-      const session = await currentSession()
-      if (cancelled || !session) return
-      householdId.current = await loadJSON<string | null>(HOUSEHOLD_KEY, null)
-      setReady(householdId.current != null)
+      const id = await resolveHouseholdId().catch(() => null)
+      if (cancelled) return
+      householdId.current = id
+      setReady(id != null)
     })()
     return () => {
       cancelled = true

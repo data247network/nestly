@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import { ensureHousehold, signIn as cloudSignIn, signUp as cloudSignUp } from '../cloud/sync'
-import { saveJSON } from '../platform/storage'
+import { KEYS, saveJSON } from '../platform/storage'
 import { Display, Field, FieldLabel, GhostButton, PrimaryButton, Wordmark } from '../ui/kit'
 
 /**
@@ -30,8 +30,14 @@ export function checkCredentials(email: string, password: string): boolean {
   return email.trim().toLowerCase() === DEFAULT_EMAIL && password === DEFAULT_PASSWORD
 }
 
-/** Where the household id lands so the sync layer can pick it up later. */
-export const HOUSEHOLD_KEY = 'nestly.household'
+/**
+ * Where the household id lands so the sync layer can pick it up later.
+ *
+ * Re-exported from the key registry rather than declared here, so the callers
+ * that already import it from this screen keep working while there is only one
+ * definition of the string.
+ */
+export const HOUSEHOLD_KEY = KEYS.household
 
 export function Login({ onSignedIn }: { onSignedIn: () => void }) {
   const cloud = hasCloud()

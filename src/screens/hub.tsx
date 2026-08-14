@@ -1,22 +1,31 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDevice } from '../platform/device'
+import { useOnline } from '../platform/online'
 import { ScreenTitle } from '../ui/kit'
 import { ago } from './setup'
 
 /**
  * Notes between the two phones.
  *
- * This is not a chat and does not pretend to be. Over Bluetooth a note can only
- * cross when the phones are near each other, so each one shows its real state:
- * queued until the other phone has it, then delivered. A tick that means
- * "probably" would be worse than no tick at all — a parent has to be able to
- * tell whether their child has actually seen something.
+ * This is not a chat and does not pretend to be. A note travels over the
+ * internet where there is one and over Bluetooth where there is not, and either
+ * way it shows its real state: waiting until the other phone actually holds it,
+ * then delivered. A tick that means "probably" would be worse than no tick at
+ * all — a parent has to be able to tell whether their child has really seen
+ * something.
+ *
+ * The status line is written from what is true rather than from what is hoped.
+ * It used to promise that notes "cross straight away" whenever Bluetooth was
+ * connected and otherwise that they would wait for the phones to be near each
+ * other — which stopped being true the moment notes went over the internet, and
+ * was the sort of wrong that makes someone resend a note that already arrived.
  *
  * Runs on both devices; the only difference is which side of the thread is
  * "you".
  */
 export function FamilyHub() {
   const { notes, sendNote, role, name, child, link } = useDevice()
+  const online = useOnline()
   const [draft, setDraft] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
 
@@ -27,6 +36,20 @@ export function FamilyHub() {
   const other =
     role === 'parent' ? (child?.name ?? 'your child') : 'your parent'
   const pending = notes.filter((n) => n.from === role && !n.delivered).length
+  const near = link.state === 'connected'
+
+  const status = (() => {
+    if (pending > 0) {
+      // Deliberately not "sent". The server may well have it; that is not the
+      // question being asked, which is whether the other phone does.
+      return online || near
+        ? `${pending} waiting to reach ${other}.`
+        : `${pending} waiting. They'll go as soon as you're back online, or when your phones are next close.`
+    }
+    if (online) return `Notes reach ${other} wherever they are.`
+    if (near) return `No connection — but ${other} is close by, so notes still cross.`
+    return `No connection. Notes will go when you're back online, or when your phones are next close.`
+  })()
 
   const submit = () => {
     const text = draft
@@ -38,13 +61,7 @@ export function FamilyHub() {
     <div className="flex h-full flex-col">
       <div className="border-b border-line px-[22px] pb-3 pt-6">
         <ScreenTitle>Notes</ScreenTitle>
-        <div className="mt-1 text-[11.5px] leading-snug text-body">
-          {link.state === 'connected'
-            ? `Connected to ${other} — notes cross straight away.`
-            : pending > 0
-              ? `${pending} waiting. They'll cross next time the phones are near each other.`
-              : `Left for ${other}. Delivered when your phones are next close.`}
-        </div>
+        <div className="mt-1 text-[11.5px] leading-snug text-body">{status}</div>
       </div>
 
       <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-5 py-[18px]">
@@ -52,7 +69,8 @@ export function FamilyHub() {
           <div className="my-auto rounded-2xl bg-cream px-4 py-6 text-center text-[12.5px] leading-relaxed text-body">
             No notes yet.
             <br />
-            Leave one — it arrives when your phones are next together.
+            Leave one — it goes over the internet, or over Bluetooth when your
+            phones are close.
           </div>
         ) : null}
 
@@ -73,7 +91,11 @@ export function FamilyHub() {
                 className={`mt-1 text-[10.5px] text-muted ${mine ? 'text-right' : 'text-left'}`}
               >
                 {ago(n.ts)}
-                {mine ? (n.delivered ? ' · delivered' : ' · waiting to send') : ''}
+                {/* "waiting", not "waiting to send": it may well have been
+                    sent, and be sitting on the server until the other phone
+                    picks it up. What the sender wants to know is whether it
+                    arrived. */}
+                {mine ? (n.delivered ? ' · delivered' : ' · waiting') : ''}
               </div>
             </div>
           )

@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core'
+import { Geolocation } from '@capacitor/geolocation'
 import { NestlyLink, type NativeVisit } from '../link/ble-peripheral'
 import {
   distanceM,
@@ -92,6 +93,15 @@ const emptyState = (): Persisted => ({
 /** Keep the log bounded — a child phone can go a long time without contact. */
 const MAX_LOG = 500
 const TICK_MS = 15_000
+
+/**
+ * How long to wait for an on-demand fix before answering with what we have.
+ *
+ * Indoors a high-accuracy lock can take a very long time or never arrive, and a
+ * parent is watching a spinner throughout. Twelve seconds is long enough for a
+ * warm GPS or a wifi fix and short enough to stay honest about the wait.
+ */
+const LOCATE_TIMEOUT_MS = 12_000
 
 export class ChildAgent {
   private state: Persisted = emptyState()
@@ -718,6 +728,91 @@ export class ChildAgent {
       // exactly once, in one place.
       await this.onMessage(res.policy as Policy)
     }
+
+    // A parent tapped Locate while this phone was out of Bluetooth range. The
+    // guard matters: `serveLocate` pushes to the cloud itself, so answering a
+    // request that is already served would loop.
+    if (res.ok && res.locateNow && !this.servingLocate) {
+      this.servingLocate = true
+      try {
+        await this.serveLocate()
+      } finally {
+        this.servingLocate = false
+      }
+    }
+  }
+
+  /** One on-demand fix at a time; a second request rides the first answer. */
+  private servingLocate = false
+
+  /**
+   * Answers "where are you now?".
+   *
+   * Takes a *fresh* reading rather than reporting the last one. The buffered
+   * fixes the agent normally works from can be minutes old, which is fine for a
+   * trickle and useless for the one moment a parent is standing there watching
+   * a spinner — that is the whole difference between this and telemetry.
+   *
+   * Goes out over both links. Whichever the parent is listening on is the one
+   * that matters, and the device has no way to know which that is.
+   *
+   * A phone that cannot get a fix answers with what it has, including nothing.
+   * Staying silent would leave the parent's screen waiting indefinitely on a
+   * position that is never coming; an honest "no fix" is a shorter wait.
+   */
+  private async serveLocate() {
+    const fix = await this.currentFix()
+    if (fix) this.emit({ lastFix: fix })
+
+    // The radio first: it is the one that works with no signal at all, and if
+    // the parent is close enough to be on it the answer is instant.
+    await this.push()
+
+    await uplink({
+      telemetry: {
+        t: 'telemetry',
+        ts: Date.now(),
+        battery: this.snapshot.battery,
+        charging: this.snapshot.charging,
+        fix: fix ?? this.snapshot.lastFix,
+        activeScenarioId: this.snapshot.activeScenario?.id ?? null,
+        locked: this.snapshot.locked,
+      },
+      ...(fix ? { locateFix: { lat: fix.lat, lng: fix.lng, acc: fix.acc, ts: fix.ts } } : {}),
+    })
+    this.lastCloudPush = Date.now()
+  }
+
+  /**
+   * One reading, now.
+   *
+   * Asks the platform directly rather than draining the agent's buffer — the
+   * buffer is what a background service happened to collect, and the point here
+   * is to go and look. High accuracy, and a hard timeout: a parent waiting is
+   * better served by a slightly coarse fix than by a GPS lock that never comes
+   * indoors.
+   */
+  private async currentFix(): Promise<Fix | null> {
+    try {
+      const pos = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: LOCATE_TIMEOUT_MS,
+        // Never a cached reading: "where are you now" answered from a minute
+        // ago is the exact failure this whole path exists to fix.
+        maximumAge: 0,
+      })
+      return {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        acc: pos.coords.accuracy ?? 0,
+        ts: pos.timestamp || Date.now(),
+      }
+    } catch {
+      // Permission refused, location switched off, or nothing in range. Fall
+      // back to whatever the buffer last held rather than reporting nothing.
+      const buffered = await this.collectFixes()
+      return buffered[buffered.length - 1] ?? this.snapshot.lastFix
+    }
   }
 
   private async push() {
@@ -761,6 +856,11 @@ export class ChildAgent {
       // out of a stuck lock is the parent publishing a *newer* policy, which
       // both transports now carry — see the `>=` gate in `pushCloud` and the
       // republish-on-ready in CloudBridge.
+      return
+    }
+
+    if (msg.t === 'locate') {
+      await this.serveLocate()
       return
     }
 

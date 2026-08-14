@@ -26,7 +26,14 @@ import type { ChildEvent, Telemetry, UsageReport } from '../link/protocol'
  *     safety than a location that is five minutes stale.
  */
 
-const ENDPOINT = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/child-sync`
+/**
+ * Where the child device posts.
+ *
+ * Exported because notes use the same door — a child has one credential and one
+ * route to the server, and giving notes their own endpoint would mean a second
+ * copy of the device-secret check to keep in step with this one.
+ */
+export const ENDPOINT = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/child-sync`
 
 /**
  * Publishes the endpoint for the native uploader.
@@ -74,6 +81,14 @@ export type UplinkPayload = {
   telemetry?: Telemetry
   events?: ChildEvent[]
   usage?: UsageReport
+  /**
+   * A fix taken because the parent asked for one, rather than on the timer.
+   *
+   * Carried separately from `telemetry` so the server can record it against the
+   * request that prompted it. Telemetry is last-write-wins, so the very fix a
+   * parent is waiting on can be overwritten by the routine push a second later.
+   */
+  locateFix?: { lat: number; lng: number; acc: number; ts: number }
 }
 
 export type UplinkResult = {
@@ -81,6 +96,8 @@ export type UplinkResult = {
   /** The policy the parent last published, if the server had a newer one. */
   policy?: unknown
   policyVersion?: number
+  /** A parent is waiting on a fresh position. Answer it now, not on the timer. */
+  locateNow?: boolean
 }
 
 /**
@@ -130,12 +147,18 @@ export async function uplink(payload: UplinkPayload): Promise<UplinkResult> {
               filterOn: payload.usage.filterOn,
             }
           : undefined,
+        locateFix: payload.locateFix,
       }),
     })
 
     if (!res.ok) return { ok: false }
     const body = (await res.json().catch(() => ({}))) as UplinkResult
-    return { ok: true, policy: body.policy, policyVersion: body.policyVersion }
+    return {
+      ok: true,
+      policy: body.policy,
+      policyVersion: body.policyVersion,
+      locateNow: body.locateNow ?? false,
+    }
   } catch {
     return { ok: false }
   }

@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { hasCloud } from '../cloud/client'
 import {
-  currentSession,
   loadEventsForChildren,
   loadHousehold,
   loadUsageForChildren,
+  resolveHouseholdId,
 } from '../cloud/sync'
-import { HOUSEHOLD_KEY } from '../screens/login'
-import { loadJSON } from '../platform/storage'
 import { useDevice } from '../platform/device'
 import { useStore } from './store'
 
@@ -132,10 +130,12 @@ export function CloudHydrate() {
     if (!hasCloud() || role !== 'parent') return
     let cancelled = false
     void (async () => {
-      const session = await currentSession()
-      if (cancelled || !session) return
-      householdId.current = await loadJSON<string | null>(HOUSEHOLD_KEY, null)
-      if (householdId.current) await pull()
+      // Resolves rather than merely reads. Giving up on a missing cached id is
+      // what left Home showing one child while Devices listed two.
+      const id = await resolveHouseholdId().catch(() => null)
+      if (cancelled || !id) return
+      householdId.current = id
+      await pull()
     })()
     return () => {
       cancelled = true

@@ -114,6 +114,14 @@ export const KEYS = {
    */
   enrolment: 'nestly.enrolment',
   /**
+   * The household this parent's device belongs to.
+   *
+   * Declared here with every other key rather than in `screens/login`, where it
+   * used to live, because `cloud/sync` resolves it now and importing a screen
+   * from the data layer to get a string is backwards.
+   */
+  household: 'nestly.household',
+  /**
    * When this device last opened the notes tab.
    *
    * The unread badge counted every note from the other side for all time, so it

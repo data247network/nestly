@@ -1,4 +1,5 @@
 import { fmtDuration, useStore } from '../app/store'
+import { stamp } from '../app/time'
 import { Avatar, Bars, Display, MapCanvas } from '../ui/kit'
 
 /**
@@ -58,7 +59,7 @@ export function WebOverview() {
               <span>
                 {a.title} — {a.who}
               </span>
-              <span className="text-body">{a.time}</span>
+              <span className="text-body">{stamp(a.ts)}</span>
             </div>
           ))}
         </div>

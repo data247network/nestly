@@ -30,11 +30,22 @@ import { PushNotifications } from '@capacitor/push-notifications'
  */
 export const ALERT_CHANNEL_ID = 'nestly-alerts'
 
+/**
+ * The channel notes arrive on. Must match `NOTE_CHANNEL_ID` in push-notify.
+ *
+ * Separate from alerts on purpose. Android channels are the only place a person
+ * gets to say "buzz me for this, not for that", and "my child wrote to me" and
+ * "protection was switched off" are not the same request — a parent who turns
+ * one down should keep the other. There is no manifest default for this one, so
+ * every note push names it explicitly.
+ */
+export const NOTE_CHANNEL_ID = 'nestly-notes'
+
 /** What survives the trip from the edge function into a tapped notification. */
 export type PushPayload = {
   title: string | null
   body: string | null
-  /** The `ChildEventKind` that caused this. */
+  /** The `ChildEventKind` that caused this, or `note`. */
   kind: string | null
   /** Supabase child uuid, so a tap can open the right child. */
   childId: string | null
@@ -100,6 +111,24 @@ export async function startPush(handlers: PushHandlers): Promise<() => void> {
       // contents follow the phone's own "sensitive notifications" setting —
       // a child's name and where they are should not be readable by anyone who
       // picks up a locked phone.
+      visibility: 0,
+      vibration: true,
+    })
+    // Created before registering, like the alerts channel, so it exists before
+    // any note can arrive. A push naming a channel the phone has never created
+    // is filed by Android under one it invents, which is silent — and a silent
+    // note is worse than none, because the tick still says it was delivered.
+    await PushNotifications.createChannel({
+      id: NOTE_CHANNEL_ID,
+      name: 'Notes',
+      description: 'Notes your child writes to you.',
+      // Also HIGH. A note is rare and was typed by a person who wanted an
+      // answer; burying it under a silent channel makes the feature pointless.
+      // A parent who disagrees can turn this one down without touching alerts,
+      // which is the whole reason it is a separate channel.
+      importance: 4,
+      // Private for the same reason as alerts: what a child writes should not
+      // be readable by whoever picks up a locked phone.
       visibility: 0,
       vibration: true,
     })

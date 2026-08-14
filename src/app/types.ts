@@ -108,8 +108,13 @@ export type Alert = {
   kind: AlertKind
   title: string
   who: string
-  /** Preformatted for display. `ts` is the sortable, exportable truth. */
-  time: string
+  /**
+   * When it happened. The only record of it, and formatted at render.
+   *
+   * There used to be a `time` string alongside this, built once at ingest — so
+   * an alert from yesterday still read "16:42" today, with nothing to say which
+   * day it meant. A timestamp formatted when it is drawn cannot go stale.
+   */
   ts: number
   /** Which child this came from — required once more than one is paired. */
   childId: string

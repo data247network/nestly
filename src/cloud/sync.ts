@@ -1,5 +1,5 @@
 import { hasCloud, supabase } from './client'
-import { KEYS } from '../platform/storage'
+import { KEYS, loadJSON, saveJSON } from '../platform/storage'
 import type {
   AppUsageEntry,
   ChildEvent,
@@ -170,6 +170,35 @@ export async function ensureHousehold(): Promise<string | null> {
     throw new Error('Your family was created but could not be opened. Try again.')
   }
   return mine.household_id as string
+}
+
+/**
+ * The household this device's parent belongs to, resolving it if it has to.
+ *
+ * Every cloud bridge needs this and every one of them used to do the same
+ * thing: read the cached id, and give up if it was not there. The Devices
+ * screen did not — it fell back to `ensureHousehold` and saved the result — and
+ * that difference was a real bug on a real phone. A parent who signed up on the
+ * web, or whose stored key was cleared, opened the app to a Home screen showing
+ * one child while Devices listed two, because Devices had resolved the
+ * household for itself and the bridges had quietly done nothing all session.
+ *
+ * They resolve once on mount, so "not there yet" meant "not until the app is
+ * restarted". Hence one shared resolver, with the fallback in it.
+ */
+export async function resolveHouseholdId(): Promise<string | null> {
+  if (!hasCloud()) return null
+  const cached = await loadJSON<string | null>(KEYS.household, null)
+  if (cached) return cached
+
+  // No session means nothing to resolve against, and `ensureHousehold` would
+  // create nothing under RLS anyway.
+  const session = await currentSession()
+  if (!session) return null
+
+  const id = await ensureHousehold()
+  if (id) await saveJSON(KEYS.household, id)
+  return id
 }
 
 /* ---------------------------------------------------------- enrolment -- */
@@ -939,6 +968,88 @@ export async function adminSetPlanPrice(
     p_annual: annual,
   })
   if (error) throw new Error(error.message)
+}
+
+/* ----------------------------------------------------------- locate -- */
+
+export type LocateState = {
+  requestedAt: number
+  servedAt: number | null
+  fix: Fix | null
+}
+
+/**
+ * Asks a child's phone for its position now.
+ *
+ * One row per child rather than a queue: asked twice in a minute it is the same
+ * question, and queueing the second would only make the phone take two fixes to
+ * answer it. Re-asking clears the previous answer so the screen cannot show a
+ * stale fix as though it were the reply to the tap that just happened.
+ */
+export async function requestLocate(childId: string): Promise<void> {
+  if (!hasCloud()) return
+  const { data: session } = await supabase().auth.getSession()
+  const { error } = await supabase()
+    .from('locate_requests')
+    .upsert(
+      {
+        child_id: childId,
+        requested_at: new Date().toISOString(),
+        requested_by: session.session?.user.id ?? null,
+        served_at: null,
+        lat: null,
+        lng: null,
+        accuracy_m: null,
+        fix_ts: null,
+      },
+      { onConflict: 'child_id' },
+    )
+  if (error) throw error
+}
+
+export async function loadLocate(childId: string): Promise<LocateState | null> {
+  if (!hasCloud()) return null
+  const { data } = await supabase()
+    .from('locate_requests')
+    .select('requested_at, served_at, lat, lng, accuracy_m, fix_ts')
+    .eq('child_id', childId)
+    .maybeSingle()
+  if (!data) return null
+
+  const lat = data.lat as number | null
+  const lng = data.lng as number | null
+  return {
+    requestedAt: new Date(data.requested_at as string).getTime(),
+    servedAt: data.served_at ? new Date(data.served_at as string).getTime() : null,
+    fix:
+      typeof lat === 'number' && typeof lng === 'number'
+        ? {
+            lat,
+            lng,
+            acc: Number(data.accuracy_m ?? 0),
+            // The device's clock at the moment of the reading, so the screen
+            // can say how fresh the fix is rather than how fresh the row is.
+            ts: new Date((data.fix_ts as string) ?? Date.now()).getTime(),
+          }
+        : null,
+  }
+}
+
+/** Fires when the phone answers. A poll would make three seconds feel like fifteen. */
+export function subscribeToLocate(childId: string, onChange: () => void): () => void {
+  if (!hasCloud()) return () => {}
+  const db = supabase()
+  const channel = db
+    .channel(`locate-${childId}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'locate_requests', filter: `child_id=eq.${childId}` },
+      () => onChange(),
+    )
+  channel.subscribe()
+  return () => {
+    void db.removeChannel(channel)
+  }
 }
 
 /* --------------------------------------------------------- realtime -- */

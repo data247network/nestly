@@ -36,6 +36,14 @@ const json = (body: unknown, status = 200) =>
 const MAX_EVENTS = 200
 const MAX_APPS = 200
 const MAX_SITES = 300
+const MAX_NOTES = 50
+const MAX_NOTE_ACKS = 100
+/** Longest a note may be. Generous for a note; short of a denial of service. */
+const MAX_NOTE_LENGTH = 2000
+
+/** How much of the thread a child device is handed back. */
+const NOTE_WINDOW_DAYS = 14
+const NOTE_PAGE = 50
 
 /**
  * Kinds that should reach a parent's phone as a notification rather than
@@ -114,6 +122,16 @@ type Body = {
     usageAccess?: boolean
     filterOn?: boolean
   }
+  /** Notes this child has written. `from` is ignored — see below. */
+  notes?: { id: string; text: string; ts: number }[]
+  /** Ids of the parent's notes this device has durably stored. */
+  noteAcks?: string[]
+  /** Ids of this child's own notes it is still waiting on a receipt for. */
+  notePending?: string[]
+  /** Whether to send the thread back. Skipped on plain telemetry pushes. */
+  wantNotes?: boolean
+  /** A fix taken because a parent asked, rather than on the timer. */
+  locateFix?: { lat: number; lng: number; acc?: number; ts?: number }
 }
 
 Deno.serve(async (req: Request) => {
@@ -211,6 +229,139 @@ Deno.serve(async (req: Request) => {
     results.usage = error ? "failed" : "ok"
   }
 
+  /* ------------------------------------------------------------------ notes */
+  //
+  // Notes used to cross over Bluetooth only, which meant a parent at work could
+  // not leave one for a child at school — the one thing anybody would expect an
+  // internet connection to buy them. This is the child's half of that: it can
+  // neither read nor write the `notes` table directly, because it has no account
+  // to be scoped by, so the same device secret that authenticates telemetry
+  // carries the thread.
+
+  if (Array.isArray(body.notes) && body.notes.length > 0) {
+    const notes = body.notes
+      .slice(0, MAX_NOTES)
+      .filter((n) => n?.id && typeof n.text === "string" && n.text.trim())
+
+    if (notes.length > 0) {
+      // `sender` is set here and never read from the request. A device secret
+      // authenticates a child's phone and nothing else — letting it post a note
+      // attributed to the parent would put words in their mouth on their own
+      // child's screen.
+      //
+      // ignoreDuplicates for the usual reason: the device resends until it is
+      // acknowledged, so a replay is the normal case rather than an error. It
+      // also means a client_id that collides with another household's note is a
+      // silent no-op instead of an overwrite.
+      const { error } = await admin.from("notes").upsert(
+        notes.map((n) => ({
+          child_id: childId,
+          client_id: String(n.id).slice(0, 120),
+          sender: "child",
+          body: String(n.text).slice(0, MAX_NOTE_LENGTH),
+          ts: new Date(n.ts ?? Date.now()).toISOString(),
+        })),
+        { onConflict: "client_id", ignoreDuplicates: true },
+      )
+      results.notes = error ? "failed" : notes.length
+
+      // A note nobody is told about is a note that waits until the parent
+      // happens to open the app, which for a message is indistinguishable from
+      // not sending it. Same notifier as the alerts, and for the same reason it
+      // is safe to call on a replay: it works out for itself which rows are new.
+      if (!error) await notify(childId)
+    }
+  }
+
+  if (Array.isArray(body.noteAcks) && body.noteAcks.length > 0) {
+    // Scoped to this child and to the parent's own notes, so a device secret
+    // can only ever confirm delivery of something addressed to it. Guarded on
+    // null so the first receipt is the one that stands.
+    const { error } = await admin
+      .from("notes")
+      .update({ delivered_at: now })
+      .eq("child_id", childId)
+      .eq("sender", "parent")
+      .in("client_id", body.noteAcks.slice(0, MAX_NOTE_ACKS).map(String))
+      .is("delivered_at", null)
+    results.noteAcks = error ? "failed" : "ok"
+  }
+
+  let notesOut: { id: string; from: string; text: string; ts: number }[] | undefined
+  let noteDelivered: string[] | undefined
+
+  if (body.wantNotes) {
+    const since = new Date(Date.now() - NOTE_WINDOW_DAYS * 86_400_000).toISOString()
+
+    // Recent notes rather than only unacknowledged ones: a phone that has been
+    // reinstalled or reset should find the thread where it left it, not an
+    // empty screen. The device skips the ones it already holds.
+    const { data: thread } = await admin
+      .from("notes")
+      .select("client_id, body, ts")
+      .eq("child_id", childId)
+      .eq("sender", "parent")
+      .gte("ts", since)
+      .order("ts", { ascending: true })
+      .limit(NOTE_PAGE)
+
+    notesOut = (thread ?? []).map((r) => ({
+      id: r.client_id as string,
+      from: "parent",
+      text: r.body as string,
+      // Epoch milliseconds: the device's thread sorts on the author's clock.
+      ts: new Date(r.ts as string).getTime(),
+    }))
+
+    const pending = (body.notePending ?? []).slice(0, MAX_NOTE_ACKS).map(String)
+    if (pending.length > 0) {
+      const { data: receipts } = await admin
+        .from("notes")
+        .select("client_id")
+        .eq("child_id", childId)
+        .in("client_id", pending)
+        .not("delivered_at", "is", null)
+      noteDelivered = (receipts ?? []).map((r) => r.client_id as string)
+    }
+  }
+
+  /* ----------------------------------------------------------------- locate */
+  //
+  // "Where are you now?", asked by a parent who is not going to wait out the
+  // sixty-second telemetry cadence.
+  //
+  // Answering comes first, so that a device sending its fix in the same call
+  // that would otherwise be told to take one does not go and take a second.
+
+  if (body.locateFix && Number.isFinite(body.locateFix.lat) && Number.isFinite(body.locateFix.lng)) {
+    const f = body.locateFix
+    // Recorded against the request as well as in telemetry. Telemetry is
+    // last-write-wins, so the very fix the parent is watching for can be
+    // overwritten by the routine push a second behind it.
+    const { error } = await admin
+      .from("locate_requests")
+      .update({
+        served_at: now,
+        lat: f.lat,
+        lng: f.lng,
+        accuracy_m: f.acc ?? null,
+        fix_ts: new Date(f.ts ?? Date.now()).toISOString(),
+      })
+      .eq("child_id", childId)
+      .is("served_at", null)
+    results.locate = error ? "failed" : "ok"
+  }
+
+  // Only an unanswered request counts. Without the null check the device would
+  // be asked to fetch a fix on every sync for the rest of the day, which on a
+  // child's phone is a GPS lock a minute — and a flat battery by the evening.
+  const { data: locate } = await admin
+    .from("locate_requests")
+    .select("requested_at, served_at")
+    .eq("child_id", childId)
+    .is("served_at", null)
+    .maybeSingle()
+
   // The policy the parent last published, so a child that has been out of
   // Bluetooth range for days still picks up a rule change over the internet.
   // Household-wide rows (child_id null) are the fallback when nothing is set
@@ -231,5 +382,8 @@ Deno.serve(async (req: Request) => {
     accepted: results,
     policy: policy?.body ?? null,
     policyVersion: policy?.version ?? 0,
+    ...(notesOut ? { notes: notesOut } : {}),
+    ...(noteDelivered ? { noteDelivered } : {}),
+    locateNow: Boolean(locate),
   })
 })

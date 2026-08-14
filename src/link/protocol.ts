@@ -272,8 +272,26 @@ export type Policy = {
 /** Parent confirms it has durably stored events up to and including `upTo`. */
 export type Ack = { t: 'ack'; upTo: number; policyVersion: number }
 
+/**
+ * "Where are you now?"
+ *
+ * Telemetry is a heartbeat on a timer, which is right for a trickle in the
+ * background and wrong for the moment a parent taps Locate — the answer on
+ * screen could be five minutes and several streets old. This asks for a fresh
+ * fix, and the child replies with an immediate `Telemetry`.
+ *
+ * Sent over the radio as well as the internet on purpose. A parent standing in
+ * the same house as a child with no signal is exactly who needs this, and the
+ * cloud is no use to them.
+ *
+ * An older child build does not know this message and ignores it, which is the
+ * same outcome as a phone that cannot get a fix: nothing arrives and the screen
+ * keeps saying so. That is why it needs no protocol bump.
+ */
+export type LocateRequest = { t: 'locate' }
+
 export type Uplink = Hello | Telemetry | Events | UsageReport
-export type Downlink = Policy | Ack
+export type Downlink = Policy | Ack | LocateRequest
 /** Notes travel both ways, so they sit outside the uplink/downlink split. */
 export type Message = Uplink | Downlink | Notes | NoteAck
 

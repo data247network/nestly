@@ -88,6 +88,21 @@ export class ParentLink {
     await this.transport.send(policy)
   }
 
+  /**
+   * Asks the child's phone where it is now.
+   *
+   * Returns whether the question was actually asked, so the screen can tell a
+   * request that is on its way from one that never left — a parent watching a
+   * spinner on a disconnected radio is being lied to. Nothing is queued: this
+   * is a live question, and asking it ten minutes later when the phones happen
+   * to meet would answer a question nobody is still waiting on.
+   */
+  async requestLocate(): Promise<boolean> {
+    if (this.transport.status().state !== 'connected') return false
+    await this.transport.send({ t: 'locate' })
+    return true
+  }
+
   getAckedSeq() {
     return this.ackedSeq
   }

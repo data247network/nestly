@@ -6,6 +6,7 @@ import { Screen } from './app/Router'
 import { PolicyBridge } from './app/PolicyBridge'
 import { CloudBridge } from './app/CloudBridge'
 import { CloudHydrate } from './app/CloudHydrate'
+import { NotesBridge } from './app/NotesBridge'
 import { PushBridge } from './app/PushBridge'
 import { WEB_SCREENS } from './app/nav'
 import { useStore } from './app/store'
@@ -115,6 +116,7 @@ export default function App() {
       <PolicyBridge />
       <CloudBridge />
       <CloudHydrate />
+      <NotesBridge />
       <PushBridge />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <UpdateBanner />

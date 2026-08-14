@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import {
-  currentSession,
   loadHousehold,
+  resolveHouseholdId,
   subscribeToChildren,
   type HouseholdSummary,
 } from '../cloud/sync'
-import { HOUSEHOLD_KEY } from '../screens/login'
-import { loadJSON } from '../platform/storage'
 import { useDevice } from '../platform/device'
 
 /**
@@ -61,10 +59,10 @@ export function useCloudChildren(): {
     let cancelled = false
 
     void (async () => {
-      const session = await currentSession()
-      if (cancelled || !session) return
-      householdId.current = await loadJSON<string | null>(HOUSEHOLD_KEY, null)
-      if (householdId.current) await refresh()
+      const id = await resolveHouseholdId().catch(() => null)
+      if (cancelled || !id) return
+      householdId.current = id
+      await refresh()
     })()
 
     return () => {

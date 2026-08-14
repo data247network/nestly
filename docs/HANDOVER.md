@@ -59,6 +59,106 @@ and each function's own check is stronger than "is this token signed".
 - Cloud → parent's phone: FCM, on the urgent kinds only, within a second of the
   child's upload
 - Viewers: Supabase realtime, debounced 800ms — no polling
+- Notes: sent immediately on both links; parent polls every 30s under realtime,
+  child polls `child-sync` every 45s
+
+## Notes
+
+Notes go over the internet, and over Bluetooth when the internet is not there.
+They were the last thing in the product that crossed by radio only.
+
+The two links cannot duplicate a note because the **sender mints its id** and
+both paths de-duplicate on it — `notes.client_id`, unique, doing exactly what
+`(child_id, seq)` does for events. That is the property to preserve; a
+server-generated id cannot work, because the phone that wrote the note has
+already filed it under its own and would not recognise the row coming back.
+
+Four pieces:
+
+| Piece | Does |
+|---|---|
+| `src/agent/notes.ts` | the store on both devices. One thread, two links |
+| `src/cloud/notes.ts` | the parent's channel — RLS + realtime |
+| `src/agent/cloudNotes.ts` | the child's channel — `child-sync` + device secret |
+| `src/app/NotesBridge.tsx` | binds a pairing to its cloud child, and gives online-only children a thread |
+
+Things worth knowing before changing it:
+
+- **`delivered` means the other phone has it, not that the server does.**
+  `synced` is the separate flag that stops re-uploading. Collapsing the two
+  would put a tick on a note sitting in Postgres while the child's phone is in a
+  bag, which is the one thing this screen must never do.
+- **Bluetooth retries anything undelivered, cloud-accepted or not.** Deliberate:
+  a note the server holds has not reached a child whose mobile data is off, and
+  that child is often standing right there. The duplicate costs nothing.
+- **`sender` is set server-side in `child-sync`, never read from the request.** A
+  device secret authenticates a child's phone and nothing else; letting it post
+  a note attributed to the parent would put words in their mouth.
+- **The poll returns recent notes, not just unacknowledged ones.** Filtering on
+  `delivered_at` would mean the first adult to open the app is the only one who
+  ever sees a note. Each channel keeps a session ack-cache so that costs one
+  write per note rather than one per cycle.
+- **`platform/device.tsx` does not import the cloud** and should stay that way —
+  it is the offline core. The parent's channel is handed in by `NotesBridge`.
+- **A note from a child raises a notification**, on its own channel
+  (`nestly-notes`, "Notes") rather than the alerts one, so a parent can silence
+  one without losing the other. Claimed via `notes.notified_at` exactly as
+  events are. Notes stack in the shade; alerts still replace by kind.
+  **The channel id is now in four places** — the two in `push.ts`, `CHANNEL_ID`
+  and `NOTE_CHANNEL_ID` in push-notify. A push naming a channel the handset has
+  never created is filed under one Android invents, which is silent: a phone on
+  an older build will not hear a note notification until it updates.
+  A parent's note is never pushed anywhere. The child's phone registers no
+  token, deliberately.
+
+## Locate
+
+The Locate button used to open the map, which showed the last telemetry push —
+a minute old at best, five under a low battery. That is a fine heartbeat and a
+poor answer to a button labelled Locate.
+
+It is now a *request*, asked over both links at once and answered by a fresh
+reading:
+
+- `locate_requests`, one row per child, not a queue. Asked twice in a minute is
+  the same question; queueing the second would make the phone take two fixes.
+- `child-sync` returns `locateNow: true` while `served_at` is null, and records
+  the answering fix on the row **as well as** in `child_telemetry` — telemetry
+  is last-write-wins, so the fix the parent is watching for can be overwritten
+  by the routine push a second behind it.
+- Over Bluetooth it is the `{t:'locate'}` downlink; the child replies with
+  immediate telemetry. An older child build ignores the message, which looks the
+  same as a phone that cannot get a fix, so there is no protocol bump.
+- `useLocate` reports honestly: asking, found, timed out at 90s, or unavailable
+  when neither link could carry the question. Worst case is about a minute — the
+  child's cloud poll plus up to 12s for the fix — and the UI says so rather than
+  spinning silently.
+- A found fix offers "Save as a zone", which *prefills* `draftFence` and opens
+  the geofence editor. It does not create a zone: naming it and choosing the
+  radius are the parent's, and a zone quietly added would start sending alerts
+  nobody asked for.
+
+## One resolver for the household id
+
+`CloudBridge`, `CloudHydrate`, `CloudWatch` and `NotesBridge` all used to read
+the cached `nestly.household` and give up when it was missing. The Devices
+screen did not — it fell back to `ensureHousehold()` and saved the result.
+
+That difference was a real bug on a real phone: Home showed one child while
+Devices listed two, because Devices had resolved the household for itself and
+the four bridges had quietly done nothing all session. They resolve once on
+mount, so "not there yet" meant "not until the app restarts".
+
+`resolveHouseholdId()` in `cloud/sync.ts` is now the only way any of them get
+it, and the fallback is inside it.
+
+## Times on screen
+
+Alerts and the activity trail rendered a bare clock, frozen at ingest. Three
+rows reading 16:42, 16:42, 16:41 from three different days are indistinguishable
+from three rows this afternoon. `app/time.ts` `stamp()` formats from `ts` at
+render — time alone today, "Yesterday HH:MM", then a date. `Alert.time` is gone;
+`ts` is the only record.
 
 ## Push
 
@@ -174,6 +274,12 @@ Things to know before changing the Stripe half:
 - the lock overlay surviving Home
 - the child uploading over mobile data in the background
 - tamper alerts firing when a permission is revoked
+- **notes between two phones that are nowhere near each other.** The server half
+  is proven end to end against the deployed `child-sync` — both directions,
+  receipts both ways, a replay staying one row, a wrong secret refused — and the
+  Bluetooth fallback is proven in the loopback browser. What no test reaches is
+  the parent's phone signed into a real account writing through RLS, and the
+  realtime socket actually firing on a handset.
 - **Stripe, end to end.** Deployed and rejecting unauthorised callers, but no
   real card has been through it. Needs: the endpoint's event list to include the
   five that are handled (`checkout.session.completed`, `invoice.paid`,

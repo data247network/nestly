@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Geolocation } from '@capacitor/geolocation'
 import { describeSchedule, fmtDuration, useStore } from '../app/store'
+import { stamp } from '../app/time'
+import { useLocate, type LocateStatus } from '../app/useLocate'
 import { useDevice } from '../platform/device'
 import { useCloudChildren } from '../app/CloudWatch'
 import type { CloudChild } from '../cloud/sync'
@@ -42,6 +44,20 @@ export function Home() {
   const { household: remote, updatedAt: remoteAt } = useCloudChildren()
   const recent = state.alerts.slice(0, 2)
   const noContacts = state.emergencyContacts.every((c) => !c.phone.trim())
+
+  // Which child Locate is about. The card the parent last tapped, falling back
+  // to the only one there is — asking "where are they" of a household with one
+  // child should not need a selection first.
+  const active = state.children.find((c) => c.id === state.activeChildId) ?? state.children[0]
+  const activeName = active?.name ?? 'your child'
+  // A cloud row keyed by pairing id is the Bluetooth side of a child who is
+  // also enrolled; one keyed by its own id was never paired. Either way this is
+  // the id the server knows them by.
+  const activeCloudId =
+    live?.cloudChildId ??
+    (remote?.children ?? []).find((c) => c.id === active?.id)?.id ??
+    null
+  const locate = useLocate(activeCloudId, live?.deviceId)
 
   // Nothing to show until a child device exists. Sending the parent straight
   // to pairing beats a dashboard of zeroes — unless a child has already been
@@ -129,9 +145,14 @@ export function Home() {
           tone="ink"
           onClick={() => dispatch({ type: 'setLockNow', value: !state.lockNow })}
         />
-        <QuickAction label="Locate" onClick={() => go('map')} />
+        <QuickAction
+          label={locate.status.state === 'asking' ? 'Asking…' : 'Locate'}
+          onClick={() => void locate.ask()}
+        />
         <QuickAction label="Device" onClick={() => go('pair')} />
       </div>
+
+      <LocatePanel status={locate.status} onDismiss={locate.reset} who={activeName} />
 
       {state.lockNow ? (
         <div className="-mt-2 rounded-xl bg-violetBg px-3 py-2 text-[11.5px] text-[#5B4EA8]">
@@ -174,7 +195,7 @@ export function Home() {
             >
               <span className={`h-2 w-2 shrink-0 rounded-full ${TONE[a.tone].dot}`} />
               <span className="text-[12.5px]">
-                {a.who} · {a.title} · {a.time}
+                {a.who} · {a.title} · {stamp(a.ts)}
               </span>
             </button>
           ))}
@@ -187,6 +208,98 @@ export function Home() {
       </div>
 
       <RecentActivity onSeeAll={() => go('trail')} />
+    </div>
+  )
+}
+
+/**
+ * What came back from tapping Locate.
+ *
+ * Says which of the four things is true rather than showing a pin and letting
+ * the parent assume. "Asking" is not "found", and a fix that never arrived has
+ * to say so — a spinner that quietly stops is how someone concludes their child
+ * is somewhere they were an hour ago.
+ *
+ * The zone offer lives here because this is the one moment a parent has a
+ * coordinate they care about in front of them. Anywhere worth a geofence is
+ * usually somewhere you have just discovered your child to be.
+ */
+function LocatePanel({
+  status,
+  onDismiss,
+  who,
+}: {
+  status: LocateStatus
+  onDismiss: () => void
+  who: string
+}) {
+  const { go, dispatch } = useStore()
+  if (status.state === 'idle') return null
+
+  if (status.state === 'asking') {
+    return (
+      <div className="-mt-2 rounded-xl bg-cream px-3.5 py-2.5 text-[11.5px] leading-snug text-body">
+        Asking {who}'s phone where it is…
+        <div className="mt-0.5 text-muted">
+          Instant if their phone is close by, up to a minute over the internet.
+        </div>
+      </div>
+    )
+  }
+
+  if (status.state === 'timeout' || status.state === 'unavailable') {
+    return (
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="-mt-2 w-full rounded-xl bg-amberBg px-3.5 py-2.5 text-left text-[11.5px] leading-snug text-[#8A5A16]"
+      >
+        {status.state === 'unavailable'
+          ? status.reason
+          : `No answer from ${who}'s phone. It may be off, out of signal, or unable to get a fix indoors.`}
+        <div className="mt-0.5 opacity-70">Tap to dismiss.</div>
+      </button>
+    )
+  }
+
+  return (
+    <div className="-mt-2 rounded-xl bg-tint px-3.5 py-3">
+      <div className="text-[12px] font-bold text-tealInk">Found {who}</div>
+      <div className="mt-0.5 text-[11.5px] text-tealInk">
+        <PositionLine fix={status.fix} />
+      </div>
+      <div className="mt-2.5 flex gap-2">
+        <button
+          type="button"
+          onClick={() => go('map')}
+          className="rounded-lg bg-white px-3 py-1.5 text-[11.5px] font-bold text-brand"
+        >
+          Show on map
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // Prefilled, not created. Naming a zone and choosing its radius are
+            // decisions only the parent can make, and a geofence quietly added
+            // at a coordinate would start sending alerts nobody asked for.
+            dispatch({
+              type: 'draftFence',
+              patch: { lat: status.fix.lat, lng: status.fix.lng },
+            })
+            go('geofence')
+          }}
+          className="rounded-lg bg-white px-3 py-1.5 text-[11.5px] font-bold text-brand"
+        >
+          Save as a zone
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="ml-auto rounded-lg px-2 py-1.5 text-[11.5px] font-bold text-tealInk opacity-70"
+        >
+          Done
+        </button>
+      </div>
     </div>
   )
 }
@@ -951,7 +1064,7 @@ export function Alerts() {
           <span>
             <span className="block text-[13px] font-bold">{a.title}</span>
             <span className="block text-[11.5px] text-body">
-              {a.who} · {a.time}
+              {a.who} · {stamp(a.ts)}
             </span>
           </span>
         </button>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useStore, type IngestedEvent } from '../app/store'
+import { stamp } from '../app/time'
 import { useDevice } from '../platform/device'
 import { Pill, ScreenTitle } from '../ui/kit'
 import { ago } from './setup'
@@ -238,9 +239,7 @@ export function RecentActivity({ onSeeAll }: { onSeeAll: () => void }) {
             <div key={e.seq} className="flex items-center gap-2.5 text-[12.5px]">
               <span className={`h-2 w-2 shrink-0 rounded-full ${tone}`} />
               <span className="min-w-0 flex-1 truncate">{label}</span>
-              <span className="shrink-0 text-[11.5px] text-body">
-                {new Date(e.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-              </span>
+              <span className="shrink-0 text-[11.5px] text-body">{stamp(e.ts)}</span>
             </div>
           )
         })}
