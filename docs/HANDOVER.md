@@ -315,6 +315,28 @@ Supabase function, and 302s to the APK.
 - Nothing personal is stored: no IP, no user agent. Just when, which button, and
   a two-letter country. An unknown country is stored as null, not guessed.
 
+## Admin lists
+
+Parents and Families both have a search box. It matches **every word in any
+field** — "eton pro" finds the Pro family belonging to Eton without caring about
+order — and always shows "12 of 400" rather than "12 results", because a bare
+count leaves you wondering whether the rest failed to load.
+
+**It filters client-side, and that is a deliberate ceiling.** The `parents` and
+`families` admin actions return every row, so this narrows what is shown, not
+what is fetched. Fine at this size and instant; when a list reaches a few
+thousand rows it is the *fetch* that needs paging, and the search term should
+move into those two actions in `admin-api`.
+
+Dashboard tiles drill into the list behind them — Families, Parents, Children
+and Subscriptions all navigate, and Subscriptions arrives with "Paying families
+only" ticked, shown as a visible toggle rather than applied invisibly. Choosing
+a section from the sidebar clears whatever a tile asked for.
+
+Downloads has no list yet: `admin-api` has no `downloads` or `children` action,
+so those two would need new read-only handlers before their tiles could open
+anything.
+
 ## Payments
 
 Two providers, and they are **not** interchangeable — the difference reaches the

@@ -97,6 +97,14 @@ async function callAdmin<T>(action: string, payload: Record<string, unknown> = {
 
 export function Admin() {
   const [section, setSection] = useState<Section>('dashboard')
+  /**
+   * What a dashboard tile asked the next section to show.
+   *
+   * Keyed so that landing on a list carries the question that got you there —
+   * clicking Subscriptions and arriving at every family, filtered by nothing,
+   * makes you do the filtering again by hand.
+   */
+  const [drill, setDrill] = useState<{ query?: string; subscribedOnly?: boolean }>({})
   const [gate, setGate] = useState<'checking' | 'anon' | 'denied' | 'ok'>('checking')
   const [email, setEmail] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
@@ -142,7 +150,13 @@ export function Admin() {
             <button
               key={n.id}
               type="button"
-              onClick={() => setSection(n.id)}
+              onClick={() => {
+                // Clear whatever a tile asked for. Choosing Families from the
+                // sidebar means "show me the families", not "show me the
+                // filtered set I drilled into ten minutes ago".
+                setDrill({})
+                setSection(n.id)
+              }}
               className={`flex items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-left text-[13.5px] font-bold transition ${
                 section === n.id ? 'bg-ink text-white' : 'text-body hover:bg-cream'
               }`}
@@ -179,7 +193,13 @@ export function Admin() {
             <button
               key={n.id}
               type="button"
-              onClick={() => setSection(n.id)}
+              onClick={() => {
+                // Clear whatever a tile asked for. Choosing Families from the
+                // sidebar means "show me the families", not "show me the
+                // filtered set I drilled into ten minutes ago".
+                setDrill({})
+                setSection(n.id)
+              }}
               className={`shrink-0 rounded-xl px-3 py-2 text-[12.5px] font-bold ${
                 section === n.id ? 'bg-ink text-white' : 'bg-cream text-body'
               }`}
@@ -196,11 +216,23 @@ export function Admin() {
         ) : null}
 
         {section === 'dashboard' ? (
-          <Overview stats={stats} onGoParents={() => setSection('parents')} />
+          <Overview
+            stats={stats}
+            onDrill={(next, opts) => {
+              setDrill(opts ?? {})
+              setSection(next)
+            }}
+          />
         ) : section === 'parents' ? (
-          <Parents />
+          // Keyed on the drill so that arriving from a tile resets the search
+          // rather than inheriting whatever was typed the last time.
+          <Parents key={`p-${drill.query ?? ''}`} initialQuery={drill.query} />
         ) : section === 'families' ? (
-          <Families />
+          <Families
+            key={`f-${drill.query ?? ''}-${drill.subscribedOnly ? 1 : 0}`}
+            initialQuery={drill.query}
+            subscribedOnly={drill.subscribedOnly}
+          />
         ) : (
           <PlanEditor />
         )}
@@ -211,7 +243,79 @@ export function Admin() {
 
 /* --------------------------------------------------------------- overview */
 
-function Overview({ stats, onGoParents }: { stats: Stats | null; onGoParents: () => void }) {
+/**
+ * The filter box above a list.
+ *
+ * Client-side, deliberately, and worth being explicit about the limit: the
+ * admin actions return every row, so this narrows what is *shown*, not what is
+ * fetched. That is the right trade at this size — instant, no round trip, works
+ * across every column at once — and it is the fetch, not the filter, that will
+ * need paging first. When a list reaches a few thousand rows the search term
+ * should move into the `parents` / `families` actions in admin-api.
+ */
+function SearchBox({
+  value,
+  onChange,
+  placeholder,
+  count,
+  total,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  count: number
+  total: number
+}) {
+  return (
+    <div className="mt-5 flex flex-wrap items-center gap-3">
+      <div className="relative min-w-[220px] flex-1">
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          aria-label={placeholder}
+          className="w-full rounded-xl border border-line py-2.5 pl-9 pr-9 text-[13.5px] outline-none focus:border-brand"
+        />
+        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-muted">
+          ⌕
+        </span>
+        {value ? (
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-[13px] text-muted hover:text-ink"
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
+      <span className="text-[12px] text-body">
+        {/* Both numbers, always. "12 results" alone leaves you wondering
+            whether the other 400 failed to load or simply did not match. */}
+        {value ? `${count} of ${total}` : `${total} total`}
+      </span>
+    </div>
+  )
+}
+
+/** Case-insensitive match across every field a row is identified by. */
+function matches(query: string, ...fields: (string | null | undefined)[]): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  // Every word must appear somewhere, in any field: "eton pro" finds the Pro
+  // family belonging to Eton without caring which order they were typed in.
+  const haystack = fields.filter(Boolean).join(' ').toLowerCase()
+  return q.split(/\s+/).every((word) => haystack.includes(word))
+}
+
+function Overview({
+  stats,
+  onDrill,
+}: {
+  stats: Stats | null
+  onDrill: (section: Section, opts?: { query?: string; subscribedOnly?: boolean }) => void
+}) {
   if (!stats) return <Note>No data.</Note>
   const t = stats.totals
   const peak = Math.max(1, ...stats.downloadsByDay.map((d) => d.parent + d.child))
@@ -223,11 +327,24 @@ function Overview({ stats, onGoParents }: { stats: Stats | null; onGoParents: ()
         Across every household · updated {ago(stats.generatedAt)}
       </p>
 
+      {/* Every tile that has a list behind it opens it. A number you cannot
+          click through to is a number you have to take on faith, which for a
+          dashboard is the opposite of the point — the first question after
+          "two families" is always "which two". */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <Tile label="Families" value={t.households} />
-        <Tile label="Parents" value={t.parents} onClick={onGoParents} />
-        <Tile label="Children" value={t.children} note={`${t.childrenEnrolled} linked`} />
-        <Tile label="Subscriptions" value={t.subscriptions} />
+        <Tile label="Families" value={t.households} onClick={() => onDrill('families')} />
+        <Tile label="Parents" value={t.parents} onClick={() => onDrill('parents')} />
+        <Tile
+          label="Children"
+          value={t.children}
+          note={`${t.childrenEnrolled} linked`}
+          onClick={() => onDrill('families')}
+        />
+        <Tile
+          label="Subscriptions"
+          value={t.subscriptions}
+          onClick={() => onDrill('families', { subscribedOnly: true })}
+        />
         <Tile label="Downloads (7d)" value={t.downloads7d} note={`${t.countries} countries`} />
       </div>
 
@@ -298,12 +415,13 @@ function Overview({ stats, onGoParents }: { stats: Stats | null; onGoParents: ()
 
 /* ---------------------------------------------------------------- parents */
 
-function Parents() {
+function Parents({ initialQuery = '' }: { initialQuery?: string }) {
   const [rows, setRows] = useState<Parent[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<{ id: string; what: 'ban' | 'delete' } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [query, setQuery] = useState(initialQuery)
 
   const load = useCallback(async () => {
     try {
@@ -348,6 +466,15 @@ function Parents() {
 
   if (!rows) return <Note>Loading parents…</Note>
 
+  const shown = rows.filter((p) =>
+    matches(
+      query,
+      p.email,
+      p.adminRole,
+      ...p.households.flatMap((h) => [h.name, h.plan, h.role]),
+    ),
+  )
+
   return (
     <>
       <Display className="text-[26px]">Parents</Display>
@@ -367,8 +494,25 @@ function Parents() {
         </div>
       ) : null}
 
+      {/* Searches the family names and plans too, not just the email. The
+          question is usually "who is on the Etons account", and the answer is
+          not in any one column. */}
+      <SearchBox
+        value={query}
+        onChange={setQuery}
+        placeholder="Search by email, family or plan…"
+        count={shown.length}
+        total={rows.length}
+      />
+
+      {shown.length === 0 && rows.length > 0 ? (
+        <div className="mt-5 rounded-2xl border border-dashed border-line2 px-5 py-8 text-center text-[13px] text-body">
+          No parent matches “{query}”.
+        </div>
+      ) : null}
+
       <div className="mt-5 flex flex-col gap-2.5">
-        {rows.map((p) => (
+        {shown.map((p) => (
           <div key={p.id} className="rounded-2xl border border-line px-4 py-3.5">
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-0 flex-1">
@@ -470,8 +614,17 @@ function Parents() {
 
 /* --------------------------------------------------------------- families */
 
-function Families() {
+function Families({
+  initialQuery = '',
+  subscribedOnly = false,
+}: {
+  initialQuery?: string
+  /** Arrived here from the Subscriptions tile, so show only what it counted. */
+  subscribedOnly?: boolean
+}) {
   const [rows, setRows] = useState<Family[] | null>(null)
+  const [query, setQuery] = useState(initialQuery)
+  const [onlySubscribed, setOnlySubscribed] = useState(subscribedOnly)
   // Options come from the catalogue, not a literal. A hardcoded list drifts the
   // moment a plan is created here, and offering an id that does not exist sets
   // a household to a plan with no limits behind it.
@@ -522,6 +675,11 @@ function Families() {
 
   if (!rows) return <Note>Loading families…</Note>
 
+  const pool = onlySubscribed ? rows.filter((f) => f.subscription) : rows
+  const shown = pool.filter((f) =>
+    matches(query, f.name, f.plan, f.subscription?.provider, f.subscription?.status),
+  )
+
   return (
     <>
       <Display className="text-[26px]">Families</Display>
@@ -536,8 +694,35 @@ function Families() {
         </div>
       ) : null}
 
+      <SearchBox
+        value={query}
+        onChange={setQuery}
+        placeholder="Search by family, plan or provider…"
+        count={shown.length}
+        total={pool.length}
+      />
+
+      {/* Shown as a toggle rather than applied invisibly. Arriving from the
+          Subscriptions tile with a filtered list and no way to tell is how
+          somebody concludes half their families have vanished. */}
+      <label className="mt-3 flex w-fit cursor-pointer items-center gap-2 text-[12.5px] text-body">
+        <input
+          type="checkbox"
+          checked={onlySubscribed}
+          onChange={(e) => setOnlySubscribed(e.target.checked)}
+          className="h-3.5 w-3.5 accent-[#147D77]"
+        />
+        Paying families only
+      </label>
+
+      {shown.length === 0 && pool.length > 0 ? (
+        <div className="mt-5 rounded-2xl border border-dashed border-line2 px-5 py-8 text-center text-[13px] text-body">
+          No family matches “{query}”.
+        </div>
+      ) : null}
+
       <div className="mt-5 flex flex-col gap-2.5">
-        {rows.map((f) => (
+        {shown.map((f) => (
           <div key={f.id} className="rounded-2xl border border-line px-4 py-3.5">
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-0 flex-1">
