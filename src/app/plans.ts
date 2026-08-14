@@ -8,7 +8,7 @@
  * people on the plan.
  */
 
-export type PlanId = 'free' | 'pro' | 'premium'
+export type PlanId = 'free' | 'standard' | 'pro' | 'premium'
 
 export type Plan = {
   id: PlanId
@@ -21,37 +21,71 @@ export type Plan = {
   blurb: string
 }
 
+/**
+ * The offline fallback for the catalogue.
+ *
+ * The real prices and limits live in the `plans` table and are read at runtime,
+ * so an admin can retire a tier or move a price without a release. This copy is
+ * what the app shows before that read lands, and on a phone with no signal —
+ * which for this product is a normal Tuesday, not an error state.
+ *
+ * Keep it in step with the database. Sterling is derived from the Naira price
+ * at ₦1,842 to the pound, which is the rate the pricing sheet itself uses.
+ */
 export const PLANS: Record<PlanId, Plan> = {
   free: {
     id: 'free',
-    name: 'Family',
+    name: 'Free Plan',
     parents: 1,
-    children: 2,
+    children: 1,
     priceMonthly: '£0',
     priceAnnual: '£0',
-    blurb: 'One parent and up to two children, with every feature included.',
+    blurb: 'One adult and one child, with every feature included.',
+  },
+  standard: {
+    id: 'standard',
+    name: 'Standard',
+    parents: 2,
+    children: 2,
+    priceMonthly: '£0.54',
+    priceAnnual: '£5.54',
+    blurb: 'Two adults and up to two children — both adults see the same picture.',
   },
   pro: {
     id: 'pro',
     name: 'Pro',
     parents: 2,
     children: 4,
-    priceMonthly: '£4.99',
-    priceAnnual: '£45',
-    blurb: 'Two parents and up to four children — both adults see the same picture.',
+    priceMonthly: '£1.09',
+    priceAnnual: '£11.07',
+    blurb: 'Two adults and up to four children.',
   },
   premium: {
     id: 'premium',
     name: 'Premium',
     parents: 3,
     children: 6,
-    priceMonthly: '£7.99',
-    priceAnnual: '£72',
+    priceMonthly: '£1.63',
+    priceAnnual: '£16.61',
     blurb: 'Three adults and up to six children, for larger or blended households.',
   },
 }
 
-export const PLAN_ORDER: PlanId[] = ['free', 'pro', 'premium']
+export const PLAN_ORDER: PlanId[] = ['free', 'standard', 'pro', 'premium']
+
+/**
+ * One extra adult, or one extra child, on top of whatever plan you are on.
+ *
+ * Priced per unit rather than as another tier, because needing one more child
+ * slot should not mean buying three. Yearly follows the same rule as the plans:
+ * fifteen per cent off twelve months.
+ */
+export const ADDON_UNIT = {
+  monthly: '£0.38',
+  annual: '£3.88',
+  monthlyNGN: 700,
+  annualNGN: 7140,
+} as const
 
 export function planOf(id: PlanId | undefined): Plan {
   return PLANS[id ?? 'free'] ?? PLANS.free

@@ -176,6 +176,33 @@ carries Gradle's `output-metadata.json` alongside it as
 `build.gradle` and **refuses to publish a mismatch**. build.gradle says what
 the next build will be; the metadata says what these bytes actually are.
 
+### Pushing to GitHub
+
+The repo is private and this machine has no working credential helper for it —
+a plain `git push` fails with `Repository not found`, which is GitHub's answer
+for "private repo, and you are nobody". A personal access token is kept as a
+**comment on line 7 of `.env.local`**, which is gitignored and untracked.
+
+Push with it without ever storing it in the repo:
+
+```bash
+TOKEN=$(grep -o 'ghp_[A-Za-z0-9_]*' .env.local | head -1)
+git push "https://x-access-token:${TOKEN}@github.com/data247network/nestly.git" main
+```
+
+Deliberately *not* `git remote set-url` with the token in it. That writes the
+credential into `.git/config` in plaintext, where it survives every future
+clone of the working tree, shows up in `git remote -v` on a shared screen, and
+is the kind of thing that ends up in a screenshot. The one-off URL leaves the
+remote clean — check with `git remote get-url origin`.
+
+Vercel deploys `main` automatically, so the push *is* the publish.
+
+If the token stops working it has been rotated or expired: mint a new one at
+GitHub → Settings → Developer settings → Personal access tokens, with `repo`
+scope, and replace the comment. **Never `git add -A` after editing `.env.local`
+without looking** — see the Firebase key incident below.
+
 Release checklist:
 
 1. Bump `versionCode` (and `versionName`) in `android/app/build.gradle`
@@ -229,6 +256,64 @@ Three properties worth knowing before changing it:
   404, and on nothing else — a generic `INVALID_ARGUMENT` is far more often a
   malformed message, and pruning on it would empty a household's registrations
   over one bad send.
+
+## The plan catalogue
+
+Four tiers, and the numbers live in `plans` + `plan_prices`, read at runtime.
+`src/app/plans.ts` is the offline fallback only — keep the two in step.
+
+| id | name | adults | children | ₦/mo | ₦/yr | £/mo | £/yr |
+|---|---|---|---|---|---|---|---|
+| `free` | Free Plan | 1 | 1 | 0 | 0 | 0 | 0 |
+| `standard` | Standard | 2 | 2 | 1,000 | 10,200 | 0.54 | 5.54 |
+| `pro` | Pro | 2 | 4 | 2,000 | 20,400 | 1.09 | 11.07 |
+| `premium` | Premium | 3 | 6 | 3,000 | 30,600 | 1.63 | 16.61 |
+
+Two rules, neither recoverable from the numbers alone:
+
+- **Yearly is 15% off the whole year.** The pricing sheet had Standard that way
+  but Pro and Premium at 15% off *one month* (24,000 → 23,700), which is a 1.25%
+  discount announced as 15% and would have made the cheapest tier the best value
+  per adult. Confirmed and corrected.
+- **Sterling is derived from Naira at ₦1,842 to the pound.** The sheet's own
+  rate — 700 ÷ 0.38 exactly, and it reproduces 0.54, 1.09 and 1.63. Stored, not
+  computed at runtime, so a moving rate cannot reprice everybody mid-month.
+
+The catalogue before this was incoherent: the row with id `free` was named
+"Standard" at £4, the real free tier sat under `defaultfreeplan` which no
+household could be assigned to, and the Naira prices bore no relation to the
+Sterling ones.
+
+**Add-ons.** One extra adult or child on top of any plan: ₦700/£0.38 per unit
+per month, ₦7,140/£3.88 per year. `addon_prices` holds the price,
+`household_addons` holds what a household bought, and `household_limits()` is
+the one place plan + add-ons are added up — three copies of a capacity check is
+three chances to let somebody past it. `household_addons` is readable by the
+household and **writable only by the service role**, like `subscriptions`:
+entitlement a client can edit is not entitlement.
+
+## Downloads and countries
+
+Both read zero on the admin dashboard because nothing had ever written to
+`app_downloads`. The download button was a plain `<a href download>` to a static
+file on Vercel, so no code of ours ran at either end.
+
+The chain now: the button points at **`/api/download?variant=…`** (a Vercel edge
+function), which reads `x-vercel-ip-country`, calls the **`log-download`**
+Supabase function, and 302s to the APK.
+
+- It has to be a Vercel function, because Vercel is the only part of this stack
+  that is told the country. Supabase's gateway *strips* inbound geo headers —
+  correctly, since a client that can set `cf-ipcountry` can set it to anything —
+  so a request pointed straight at Supabase always recorded `country: null`.
+  That was verified, not assumed.
+- **302, never 301.** A permanent redirect gets cached and every later download
+  skips the function, so the counter would show a burst on day one and silence
+  after — indistinguishable from a product nobody wants.
+- The recorder is never awaited and never fatal. Somebody installing the app
+  their child's safety depends on must not be blocked by our analytics.
+- Nothing personal is stored: no IP, no user agent. Just when, which button, and
+  a two-letter country. An unknown country is stored as null, not guessed.
 
 ## Payments
 

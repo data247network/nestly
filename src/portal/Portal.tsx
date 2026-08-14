@@ -324,11 +324,13 @@ function Downloads() {
             title="Parent's phone"
             body="See where they are, set routines and limits, read the activity report."
             version={version}
+            variant="parent"
           />
           <DownloadCard
             title="Child's phone"
             body="Runs the routines, keeps emergency numbers reachable, shows exactly what is shared."
             version={version}
+            variant="child"
           />
         </div>
 
@@ -338,22 +340,41 @@ function Downloads() {
   )
 }
 
+/**
+ * Where the download button points.
+ *
+ * Through `/api/download` rather than straight at the file, because that route
+ * is the only place in this stack that is told which country the request came
+ * from — Vercel injects it, and Supabase's gateway strips inbound geo headers.
+ * It records the download and redirects to the APK, so the user still just gets
+ * a file.
+ *
+ * If that route is missing or failing the redirect is what breaks, not the
+ * count, so it is worth saying plainly: this is on the critical path of
+ * installing the app. It does nothing but read a header, fire one bounded
+ * request it does not await, and redirect.
+ */
+function downloadHref(variant: 'parent' | 'child'): string {
+  return `/api/download?variant=${variant}`
+}
+
 function DownloadCard({
   title,
   body,
   version,
+  variant,
 }: {
   title: string
   body: string
   version: { name: string; size: number } | null
+  variant: 'parent' | 'child'
 }) {
   return (
     <div className="flex flex-col rounded-2xl border border-line p-5">
       <h3 className="text-[15px] font-bold">{title}</h3>
       <p className="mt-1.5 flex-1 text-[13px] leading-relaxed text-body">{body}</p>
       <a
-        href={APK}
-        download
+        href={downloadHref(variant)}
         className="mt-4 rounded-xl bg-brand px-4 py-3 text-center text-[13.5px] font-bold text-white transition hover:bg-brandDark"
       >
         Download APK
