@@ -152,6 +152,45 @@ mount, so "not there yet" meant "not until the app restarts".
 `resolveHouseholdId()` in `cloud/sync.ts` is now the only way any of them get
 it, and the fallback is inside it.
 
+## Publishing an update
+
+The updater itself is fine and always was: `checkForUpdate` fetches
+`/downloads/latest.json` cache-busted with `no-store`, compares **versionCode**
+(never the name), and the native side verifies the SHA-256 before handing the
+file to Android. It checks once per launch — polling a manifest on a timer
+spends a family's data to learn nothing almost every time — plus the manual
+button on Devices.
+
+**The publisher was the broken part.** `publish-apk.mjs` read the APK from
+`android/app/build/outputs/apk/release/`, which `build-apk.ps1` never writes:
+it builds in a temp copy of the project and copies only the finished APK to
+`release/`. So the path under the repo held whatever Gradle last produced in
+place — days old, at the previous versionCode — while the manifest took its
+version from `build.gradle`. Publishing that pair hands every phone an update
+that installs and still reports the old number, then offers itself again for
+ever.
+
+Now: the publisher reads `release/Nestly-release.apk`, and `build-apk.ps1`
+carries Gradle's `output-metadata.json` alongside it as
+`Nestly-release.metadata.json`. The publisher cross-checks that against
+`build.gradle` and **refuses to publish a mismatch**. build.gradle says what
+the next build will be; the metadata says what these bytes actually are.
+
+Release checklist:
+
+1. Bump `versionCode` (and `versionName`) in `android/app/build.gradle`
+2. `npm run android:apk:release`
+3. `npm run apk:publish` — refuses if the APK does not match the bump
+4. Commit `public/downloads` and push to `main`; Vercel serves it
+
+`latest.json` is served `no-store` (see `vercel.json`), so a CDN cannot hold an
+old manifest and make every phone think it is current.
+
+**The download page reads its version from that manifest.** It used to be a
+constant, `'1.0'`, and it stayed `'1.0'` through eight releases — the page
+offered "Version 1.0" of a file that was 1.7. Anything a person has to remember
+to update in step with a release is something they will forget.
+
 ## Times on screen
 
 Alerts and the activity trail rendered a bare clock, frozen at ingest. Three

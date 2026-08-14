@@ -136,6 +136,22 @@ $out = if ($Release) { "$proj\release\Nestly-release.apk" } else { "$proj\releas
 Copy-Item -Force $apk $out
 $sizeMb = [math]::Round((Get-Item $out).Length / 1MB, 1)
 
+# Gradle's own record of what it just built, carried alongside the APK.
+#
+# The build happens in a temp copy of the project, so nothing under the repo's
+# android\app\build describes these bytes — it holds whatever was built last
+# time someone ran Gradle in place, which may be months old and a different
+# version. publish-apk.mjs reads this file to learn the versionCode of the
+# exact APK it is about to publish, instead of trusting a path.
+#
+# That mattered: without it the publisher happily paired a stale APK with a new
+# manifest, and every phone that took the update installed the old build and
+# went on being offered the same update for ever.
+$meta = Join-Path (Split-Path $apk) "output-metadata.json"
+if (Test-Path $meta) {
+  Copy-Item -Force $meta "$(Split-Path $out)\$([System.IO.Path]::GetFileNameWithoutExtension($out)).metadata.json"
+}
+
 # Report who signed it - a debug signature is the usual reason a sideload is
 # refused on someone else's phone, so make it impossible to ship one unaware.
 $signer = Join-Path $SdkDir "build-tools\34.0.0\apksigner.bat"

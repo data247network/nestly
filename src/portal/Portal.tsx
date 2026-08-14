@@ -25,7 +25,45 @@ import { matchPortal, normaliseCode, type PortalRoute } from './routes'
  * drifting to different versions.
  */
 const APK = '/downloads/nestly.apk'
-const VERSION = '1.0'
+
+/**
+ * What version the download page claims to be offering.
+ *
+ * Read from the same manifest the phones poll rather than written here. It was
+ * a constant — `'1.0'` — and it stayed `'1.0'` through eight releases, so the
+ * page confidently offered version 1.0 of a file that was 1.7. Anything a
+ * person could forget to update in step with a release is something they will.
+ *
+ * Falls back to saying nothing. "Version 1.0" when the truth is 1.8 is worse
+ * than no version at all: it is the number someone quotes back when reporting
+ * a bug.
+ */
+function usePublishedVersion(): { name: string; size: number } | null {
+  const [version, setVersion] = useState<{ name: string; size: number } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    // Cache-busted for the same reason the updater does it: a CDN holding an
+    // old manifest makes the number on this page wrong in exactly the way the
+    // hardcoded constant was.
+    fetch(`/downloads/latest.json?t=${Date.now()}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m: { versionName?: string; size?: number } | null) => {
+        if (cancelled || !m?.versionName) return
+        setVersion({ name: m.versionName, size: Number(m.size) || 0 })
+      })
+      .catch(() => {
+        // The page still has to render and the button still has to work. A
+        // download page that fails because it could not fetch a version string
+        // would be a worse outcome than an unlabelled button.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return version
+}
 
 export function Portal({ route }: { route: PortalRoute }) {
   if (route.name === 'setup') return <SetupLanding code={route.code} />
@@ -271,6 +309,7 @@ function Landing() {
 /* --------------------------------------------------------------- downloads */
 
 function Downloads() {
+  const version = usePublishedVersion()
   return (
     <Shell>
       <section className="mx-auto max-w-3xl px-6 py-14">
@@ -284,10 +323,12 @@ function Downloads() {
           <DownloadCard
             title="Parent's phone"
             body="See where they are, set routines and limits, read the activity report."
+            version={version}
           />
           <DownloadCard
             title="Child's phone"
             body="Runs the routines, keeps emergency numbers reachable, shows exactly what is shared."
+            version={version}
           />
         </div>
 
@@ -297,7 +338,15 @@ function Downloads() {
   )
 }
 
-function DownloadCard({ title, body }: { title: string; body: string }) {
+function DownloadCard({
+  title,
+  body,
+  version,
+}: {
+  title: string
+  body: string
+  version: { name: string; size: number } | null
+}) {
   return (
     <div className="flex flex-col rounded-2xl border border-line p-5">
       <h3 className="text-[15px] font-bold">{title}</h3>
@@ -310,7 +359,9 @@ function DownloadCard({ title, body }: { title: string; body: string }) {
         Download APK
       </a>
       <span className="mt-2 text-center text-[11.5px] text-muted">
-        Version {VERSION} · Android 5.1+
+        {version
+          ? `Version ${version.name} · ${(version.size / 1024 / 1024).toFixed(1)} MB · Android 5.1+`
+          : 'Android 5.1+'}
       </span>
     </div>
   )

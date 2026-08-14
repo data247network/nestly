@@ -28,8 +28,23 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
  * hand every existing phone an update it is guaranteed to reject, and Play
  * Protect blocks debug-signed sideloads on top of that.
  */
-const APK_RELEASE = join(root, 'android/app/build/outputs/apk/release/app-release.apk')
-const APK_DEBUG = join(root, 'android/app/build/outputs/apk/debug/app-debug.apk')
+/**
+ * What `npm run android:apk:release` actually produces.
+ *
+ * This used to point at `android/app/build/outputs/...`, which that script
+ * never writes: it builds in a temp copy of the project and copies only the
+ * finished APK to `release/`. The path under the repo holds whatever Gradle
+ * last produced in place — in practice a build from days earlier, at the
+ * previous versionCode.
+ *
+ * The result was the one failure this whole file exists to prevent. The
+ * manifest took its version from build.gradle, the APK came from the stale
+ * path, and the two disagreed: a phone downloaded "9", installed bytes that
+ * reported 8, and was offered the same update for ever after.
+ */
+const APK_RELEASE = join(root, 'release/Nestly-release.apk')
+const APK_META = join(root, 'release/Nestly-release.metadata.json')
+const APK_DEBUG = join(root, 'release/Nestly.apk')
 const OUT_DIR = join(root, 'public/downloads')
 const APK_OUT = join(OUT_DIR, 'nestly.apk')
 const MANIFEST_OUT = join(OUT_DIR, 'latest.json')
@@ -52,6 +67,7 @@ if (!existsSync(APK_RELEASE)) {
   process.exit(1)
 }
 
+
 const APK_SRC = APK_RELEASE
 
 // Read the version out of build.gradle rather than accepting an argument. A
@@ -65,6 +81,32 @@ const versionName = /versionName\s+"([^"]+)"/.exec(gradle)?.[1]
 if (!Number.isInteger(versionCode) || !versionName) {
   console.error('Could not read versionCode/versionName from android/app/build.gradle')
   process.exit(1)
+}
+
+// Cross-check against what Gradle recorded for these exact bytes.
+//
+// build.gradle says what the *next* build will be; the metadata beside the APK
+// says what this one actually is. They diverge the moment somebody bumps the
+// version and publishes without rebuilding, which is precisely the mistake
+// that is invisible until a hundred phones are stuck in an update loop.
+if (existsSync(APK_META)) {
+  const meta = JSON.parse(readFileSync(APK_META, 'utf-8'))
+  const built = meta?.elements?.[0]
+  if (built && Number(built.versionCode) !== versionCode) {
+    console.error(
+      `The APK in release/ is versionCode ${built.versionCode} (${built.versionName}), ` +
+        `but android/app/build.gradle says ${versionCode} (${versionName}).\n` +
+        'Publishing this pair would hand every phone an update that installs and\n' +
+        'still reports the old number, then offers itself again for ever.\n' +
+        'Rebuild: npm run android:apk:release',
+    )
+    process.exit(1)
+  }
+} else {
+  console.warn(
+    'No build metadata beside the APK, so its versionCode could not be verified\n' +
+      'against build.gradle. Rebuild with npm run android:apk:release to get it.',
+  )
 }
 
 mkdirSync(OUT_DIR, { recursive: true })
