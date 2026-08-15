@@ -56,6 +56,16 @@ export type AgentSnapshot = {
   usageAccess: boolean
   /** Contacts permission granted; without it new numbers go unnoticed. */
   contactsGranted: boolean
+  /**
+   * Device admin and the overlay right, as Android currently reports them.
+   *
+   * On the snapshot rather than polled separately by the screen, so there is
+   * one answer to "is protection on" and it is the same one tamper detection
+   * uses. The setup card used to ask Android itself on every single render,
+   * which was both wasteful and a second source of truth.
+   */
+  adminActive: boolean
+  overlayAllowed: boolean
   /** The most recent site the child was warned about, for the warning banner. */
   lastWarning: { domain: string; cat: string; ts: number } | null
   /** Reminders from the parent, so the child's phone can list today's. */
@@ -123,6 +133,11 @@ export class ChildAgent {
     filterRunning: false,
     usageAccess: false,
     contactsGranted: false,
+    // Assumed granted until the first read says otherwise: showing a permission
+    // prompt for a moment on every launch, before the check has run, teaches a
+    // child to dismiss it without reading.
+    adminActive: true,
+    overlayAllowed: true,
     lastWarning: null,
     reminders: [],
     dueReminder: null,
@@ -582,6 +597,25 @@ export class ChildAgent {
     } catch {
       return // older build without the method
     }
+
+    // The truth about what is switched on, published rather than discarded.
+    //
+    // This call already knew all of it and used it only to spot tampering, so
+    // the child's own screen was left asking for permissions that had been
+    // granted days earlier: `filterConsented` was written *only* inside
+    // `applyFilter`, which returns early until a policy arrives, so on every
+    // launch it read false while the VPN was demonstrably running. The setup
+    // card then told a child to turn on things that were already on — and a
+    // screen that asks for what it already has is one nobody reads.
+    //
+    // A running tunnel implies consent: it cannot start without it.
+    this.emit({
+      filterRunning: now.filterRunning,
+      filterConsented: this.snapshot.filterConsented || now.filterRunning,
+      usageAccess: now.usageAccess,
+      adminActive: now.adminActive,
+      overlayAllowed: now.overlayAllowed,
+    })
 
     // Reported by the receiver rather than inferred, so a deactivate-and-
     // reactivate between ticks is still caught.

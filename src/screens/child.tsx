@@ -197,21 +197,15 @@ function ChildStatus() {
 function ProtectionSetup() {
   const { agent } = useDevice()
   const [busy, setBusy] = useState(false)
-  // Asked for separately because it is the one permission that decides whether
-  // a lock is real. Without it the lock is a screen the child leaves by
-  // pressing Home, which is exactly what it used to be.
-  const [canOverlay, setCanOverlay] = useState(true)
-  const [adminOn, setAdminOn] = useState(true)
-
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return
-    void NestlyLink.canOverlay()
-      .then((r) => setCanOverlay(r.allowed))
-      .catch(() => setCanOverlay(true))
-    void NestlyLink.adminStatus()
-      .then((r) => setAdminOn(r.active))
-      .catch(() => setAdminOn(true))
-  })
+  // Read from the agent's snapshot rather than asked for here.
+  //
+  // This screen used to call Android itself, from an effect with no dependency
+  // array — so it fired on every render, and it was a second answer to a
+  // question the agent already asks every tick. Two sources meant they could
+  // disagree, and they did: the card sat there asking a child to switch on
+  // protection that had been on for days.
+  const canOverlay = agent?.overlayAllowed ?? true
+  const adminOn = agent?.adminActive ?? true
 
   if (!agent) return null
 
