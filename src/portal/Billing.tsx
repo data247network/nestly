@@ -370,6 +370,10 @@ export function Billing({
             .filter((p) => p.active || p.id === data.plan)
             .map((p) => {
               const isCurrent = p.id === data.plan
+              // Priced at nothing in every currency it is offered in — which is
+              // what "free" means here, rather than a plan somebody forgot to
+              // price.
+              const isFree = p.priceMonthly === 0 && p.priceAnnual === 0
               // Two providers, two currencies, and they are not alternatives to
               // each other in a way the customer can ignore: Stripe subscribes,
               // OPay sells one fixed period. Pounds lead because pounds are what
@@ -464,10 +468,20 @@ export function Billing({
                                 ', with nothing to cancel.'}
                         </p>
                       </>
+                    ) : isFree ? (
+                      // The free tier has no price *by design*, so saying its
+                      // price is missing reads as a broken plan rather than a
+                      // free one — and it was showing on the card headed
+                      // "Free".
+                      <span className="block rounded-xl bg-cream px-3 py-2.5 text-center text-[12.5px] font-bold text-body">
+                        Free — no card needed
+                      </span>
                     ) : (
-                      // Refused rather than priced at zero. A checkout button
-                      // with no price behind it takes the customer to a broken
-                      // page, which is worse than saying so here.
+                      // A paid tier with no price behind it is genuinely
+                      // misconfigured. Refused rather than priced at zero: a
+                      // checkout button with nothing behind it takes the
+                      // customer to a broken page, which is worse than saying
+                      // so here.
                       <span className="block rounded-xl bg-cream px-3 py-2.5 text-center text-[12.5px] font-bold text-muted">
                         No price set yet
                       </span>
