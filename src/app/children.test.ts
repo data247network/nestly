@@ -253,3 +253,65 @@ describe('childSeen', () => {
     expect(b.activeChildId).toBe('dev-1')
   })
 })
+
+/**
+ * A child reached over both links must be one card, not two.
+ *
+ * The bug this pins showed up on a real phone: Eliora appeared twice on Home,
+ * once from Bluetooth ("Location known", 100%) and once from the cloud
+ * ("Linked online", 0%). `CloudHydrate` filters by the pairing's stored cloud
+ * id, but that is learned from the child's `Hello` — so before the phones have
+ * been in range since installing, there is nothing to filter on and the name is
+ * the only key left.
+ */
+describe('one card per child', () => {
+  const bleChild = (name: string) => ({ ...child(`ble-${name}`, name) })
+
+  it('does not add a cloud row for a child already on screen over Bluetooth', () => {
+    const state: State = { ...INITIAL, children: [bleChild('Eliora')] }
+    const next = reducer(state, {
+      type: 'syncCloudChildren',
+      children: [
+        { id: 'cloud-eliora', name: 'Eliora', avatar: '#147D77' },
+        { id: 'cloud-darion', name: 'Darion', avatar: '#147D77' },
+      ],
+    })
+
+    expect(next.children.filter((c) => c.name === 'Eliora')).toHaveLength(1)
+    // Darion has no Bluetooth pairing, so he still needs a card of his own.
+    expect(next.children.map((c) => c.name).sort()).toEqual(['Darion', 'Eliora'])
+  })
+
+  it('matches on name regardless of case or stray spacing', () => {
+    const state: State = { ...INITIAL, children: [bleChild(' eliora ')] }
+    const next = reducer(state, {
+      type: 'syncCloudChildren',
+      children: [{ id: 'cloud-eliora', name: 'Eliora', avatar: '#147D77' }],
+    })
+    expect(next.children).toHaveLength(1)
+  })
+
+  it('refuses to merge when two children share a name', () => {
+    // Ambiguous, so nothing is guessed: both Bluetooth cards stay and the cloud
+    // row is added rather than silently folded into whichever came first.
+    const state: State = {
+      ...INITIAL,
+      children: [bleChild('Sam'), { ...child('ble-sam-2', 'Sam') }],
+    }
+    const next = reducer(state, {
+      type: 'syncCloudChildren',
+      children: [{ id: 'cloud-sam', name: 'Sam', avatar: '#147D77' }],
+    })
+    expect(next.children).toHaveLength(3)
+  })
+
+  it('keeps the Bluetooth card, which is the one with live figures', () => {
+    const state: State = { ...INITIAL, children: [bleChild('Eliora')] }
+    const next = reducer(state, {
+      type: 'syncCloudChildren',
+      children: [{ id: 'cloud-eliora', name: 'Eliora', avatar: '#147D77' }],
+    })
+    // Battery 100 from the radio, not the 0 a fresh cloud row starts at.
+    expect(next.children[0].battery).toBe(100)
+  })
+})

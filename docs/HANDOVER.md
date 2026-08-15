@@ -348,6 +348,21 @@ child reports it. `CloudHydrate`, `CloudBridge` and `NotesBridge` all read the
 stored one first and the live one second. Reading it off the radio is the bug;
 if you add a fourth consumer, do the same.
 
+**That alone was not enough**, and the reason is worth keeping. The binding is
+still *learned* from `Hello`, so it does not exist until the phones have been in
+Bluetooth range at least once since the app was installed — and a parent who
+updates while their child is at school sees the duplicate anyway. `ble_address`
+on `children` is null and Android does not expose a device's own BLE address, so
+there is nothing to match on server-side either.
+
+So `syncCloudChildren` falls back to the **name**: a cloud child whose name
+matches exactly one existing Bluetooth child is not drawn again. Deliberately
+scoped to *display*. Notes, policy and events stay keyed on ids and are never
+routed by name — merging two cards wrongly is visible and self-corrects when the
+phones next meet, whereas routing a private note by a guessed identity does not.
+Two children sharing a name is ambiguous, so nothing merges and both are shown.
+Covered by four tests in `children.test.ts`.
+
 Notes gained a tab per child on the parent's phone, for the same reason: every
 child's notes went into one list and anything typed was broadcast to all of
 them, so with two children a note meant for one went to both and the second

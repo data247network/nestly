@@ -620,7 +620,36 @@ function apply(state: State, action: Action): State {
         state.children.filter((c) => c.source === 'cloud').map((c) => [c.id, c]),
       )
 
-      const cloud = action.children.map((c) => {
+      /**
+       * The same child, arriving down both links, drawn twice.
+       *
+       * `CloudHydrate` already excludes any cloud child bound to a pairing —
+       * but that binding is learned from the child's `Hello`, so it only exists
+       * once the two phones have been in Bluetooth range since the app was
+       * installed. Until then the pairing has no cloud id, the filter cannot
+       * fire, and a parent sees their daughter twice: a "Location known" card
+       * from the radio and a "Linked online" card from the server, with
+       * different batteries.
+       *
+       * So, as a fallback, the name. It is a weaker key than an id and it is
+       * used *only* to decide what to draw — never to route a note, publish a
+       * policy or file an event, all of which stay keyed on ids. The worst case
+       * is two same-named children merged into one card until the phones next
+       * meet, which is visible and self-correcting; the worst case of getting
+       * routing wrong is a private note delivered to the wrong child.
+       *
+       * Requires exactly one match, so a household with two Sams merges
+       * nothing and shows both.
+       */
+      const bleNames = new Map<string, number>()
+      for (const c of ble) {
+        const key = c.name.trim().toLowerCase()
+        bleNames.set(key, (bleNames.get(key) ?? 0) + 1)
+      }
+      const alreadyOnScreen = (name: string) =>
+        bleNames.get(name.trim().toLowerCase()) === 1
+
+      const cloud = action.children.filter((c) => !alreadyOnScreen(c.name)).map((c) => {
         const prior = existing.get(c.id)
         // Preserve everything the screens have already computed — battery,
         // status, trend — and update only what the account is authoritative
