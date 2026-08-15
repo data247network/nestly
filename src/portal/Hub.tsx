@@ -13,6 +13,8 @@ import {
   signIn,
   signOut,
   signUp,
+  requestPasswordReset,
+  setPassword as setUserPassword,
   loadStats,
   loadDevices,
   loadAlerts,
@@ -129,6 +131,13 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
 
   if (stage === 'checking') return <Centered>Loading your family…</Centered>
 
+  // Arrived from a reset email. Supabase turns the link into a live session, so
+  // without this the person lands on their dashboard signed in and is never
+  // asked for the new password they came here to set — and the old one still
+  // works. Checked before the anon branch because the recovery session is
+  // authenticated, so `stage` is already past it.
+  if (isRecovery()) return <SetNewPassword onDone={() => void resolve()} />
+
   if (stage === 'anon') {
     return (
       <Auth
@@ -204,6 +213,84 @@ export function Hub({ intent }: { intent: 'signin' | 'signup' | 'hub' }) {
   )
 }
 
+/**
+ * Whether this page load came from a password-reset link.
+ *
+ * Supabase puts the grant in the URL *fragment*, not the query string, so it
+ * never reaches a server and is not in `location.search`.
+ */
+function isRecovery(): boolean {
+  try {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    return hash.get('type') === 'recovery'
+  } catch {
+    return false
+  }
+}
+
+/** Sets the new password on the session the recovery link established. */
+function SetNewPassword({ onDone }: { onDone: () => void }) {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await setUserPassword(password)
+      // Clear the grant out of the address bar before going on: leaving it
+      // there means a back button, a bookmark or a shared screenshot still
+      // carries a working recovery token.
+      window.history.replaceState(null, '', window.location.pathname)
+      onDone()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set that password.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="mx-auto max-w-sm px-6 py-16">
+      <Display className="text-[27px]">Choose a new password</Display>
+      <p className="mt-2 text-[13.5px] leading-relaxed text-body">
+        You're signed in from the link in your email. Set a password and you're
+        done.
+      </p>
+
+      <form onSubmit={(e) => void save(e)} className="mt-6 flex flex-col gap-3">
+        <label className="text-[11.5px] font-bold tracking-[0.05em] text-body" htmlFor="newpw">
+          NEW PASSWORD
+        </label>
+        <input
+          id="newpw"
+          type="password"
+          required
+          minLength={6}
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="-mt-1.5 rounded-xl border border-line px-4 py-3 text-[14px] outline-none focus:border-brand"
+        />
+        {error ? (
+          <div className="rounded-xl bg-coralBg px-3.5 py-2.5 text-[12.5px] text-coralInk">
+            {error}
+          </div>
+        ) : null}
+        <button
+          type="submit"
+          disabled={busy}
+          className="mt-1 rounded-xl bg-brand px-4 py-3 text-[14px] font-bold text-white transition hover:bg-brandDark disabled:opacity-50"
+        >
+          {busy ? 'Saving…' : 'Save password'}
+        </button>
+      </form>
+    </section>
+  )
+}
+
 /* -------------------------------------------------------------------- auth */
 
 function Auth({ mode, onDone }: { mode: 'signin' | 'signup'; onDone: () => void }) {
@@ -213,6 +300,8 @@ function Auth({ mode, onDone }: { mode: 'signin' | 'signup'; onDone: () => void 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirm, setConfirm] = useState(false)
+  /** Reset-link confirmation. Separate from `error` so both can show. */
+  const [sent, setSent] = useState<string | null>(null)
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -311,6 +400,42 @@ function Auth({ mode, onDone }: { mode: 'signin' | 'signup'; onDone: () => void 
         </button>
       </form>
 
+      {!isSignUp ? (
+        <div className="mt-4 text-center">
+          <button
+            type="button"
+            onClick={() => {
+              if (!email.trim()) {
+                setError('Enter your email address first, then tap this again.')
+                return
+              }
+              setBusy(true)
+              setError(null)
+              void requestPasswordReset(email.trim(), `${window.location.origin}/hub`)
+                .then(() =>
+                  // Worded identically whether or not the address has an
+                  // account. "No such user" would turn this into a way of
+                  // finding out who does.
+                  setSent('If that address has an account, a reset link is on its way.'),
+                )
+                .catch((e: unknown) =>
+                  setError(e instanceof Error ? e.message : 'Could not send that email.'),
+                )
+                .finally(() => setBusy(false))
+            }}
+            className="text-[12.5px] font-bold text-brand"
+          >
+            Forgot your password?
+          </button>
+        </div>
+      ) : null}
+
+      {sent ? (
+        <div className="mt-4 rounded-xl bg-tint px-3.5 py-2.5 text-center text-[12.5px] text-tealInk">
+          {sent}
+        </div>
+      ) : null}
+
       <div className="mt-5 text-center text-[13px] text-body">
         {isSignUp ? 'Already have an account? ' : 'New family? '}
         <button
@@ -318,6 +443,7 @@ function Auth({ mode, onDone }: { mode: 'signin' | 'signup'; onDone: () => void 
           onClick={() => {
             setIsSignUp((v) => !v)
             setError(null)
+            setSent(null)
           }}
           className="font-bold text-brand"
         >
