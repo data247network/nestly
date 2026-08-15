@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDevice } from '../platform/device'
+import { useStore } from '../app/store'
 import { useOnline } from '../platform/online'
 import { ScreenTitle } from '../ui/kit'
 import { ago } from './setup'
@@ -24,19 +25,41 @@ import { ago } from './setup'
  * "you".
  */
 export function FamilyHub() {
-  const { notes, sendNote, role, name, child, link } = useDevice()
+  const { notes: allNotes, sendNote, role, name, link } = useDevice()
+  const { state } = useStore()
   const online = useOnline()
   const [draft, setDraft] = useState('')
+  const [selected, setSelected] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * One thread per child, on a parent's phone.
+   *
+   * This screen used to pour every child's notes into a single list and
+   * broadcast anything typed to all of them at once. With one child that is
+   * indistinguishable from correct; with two it is neither — a note meant for
+   * one is sent to both, and the reply comes back into a thread that does not
+   * say who wrote it. A parent testing it reasonably concluded the second
+   * child's notes were simply not arriving.
+   *
+   * A child's phone has exactly one correspondent, so it keeps the plain list.
+   */
+  const children = role === 'parent' ? state.children : []
+  const activeId = selected ?? children[0]?.id ?? null
+  const active = children.find((c) => c.id === activeId) ?? null
+  const notes = role === 'parent' ? allNotes.filter((n) => n.childId === activeId) : allNotes
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
-  }, [notes.length])
+  }, [notes.length, activeId])
 
-  const other =
-    role === 'parent' ? (child?.name ?? 'your child') : 'your parent'
+  const other = role === 'parent' ? (active?.name ?? 'your child') : 'your parent'
   const pending = notes.filter((n) => n.from === role && !n.delivered).length
   const near = link.state === 'connected'
+
+  /** Unread per child, so a tab can say which one is waiting on you. */
+  const unreadFor = (childId: string) =>
+    allNotes.filter((n) => n.childId === childId && n.from !== role).length
 
   const status = (() => {
     if (pending > 0) {
@@ -54,14 +77,45 @@ export function FamilyHub() {
   const submit = () => {
     const text = draft
     setDraft('')
-    void sendNote(text)
+    // Addressed, not broadcast. On a child's phone there is only one
+    // destination and `childId` is ignored.
+    void sendNote(text, activeId ?? undefined)
   }
 
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-line px-[22px] pb-3 pt-6">
         <ScreenTitle>Notes</ScreenTitle>
-        <div className="mt-1 text-[11.5px] leading-snug text-body">{status}</div>
+
+        {/* Only worth the space with more than one child. A single tab that can
+            never be switched is furniture. */}
+        {children.length > 1 ? (
+          <div className="no-scrollbar -mx-[22px] mt-2.5 flex gap-1.5 overflow-x-auto px-[22px]">
+            {children.map((c) => {
+              const unread = unreadFor(c.id)
+              const on = c.id === activeId
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelected(c.id)}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-bold transition ${
+                    on ? 'bg-brand text-white' : 'bg-cream text-body'
+                  }`}
+                >
+                  {c.name}
+                  {unread > 0 && !on ? (
+                    <span className="rounded-full bg-brand px-1.5 text-[10px] text-white">
+                      {unread}
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+
+        <div className="mt-1.5 text-[11.5px] leading-snug text-body">{status}</div>
       </div>
 
       <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-5 py-[18px]">

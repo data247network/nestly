@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { hasCloud } from '../cloud/client'
-import { ensureHousehold, signIn as cloudSignIn, signUp as cloudSignUp } from '../cloud/sync'
+import {
+  ensureHousehold,
+  existingHouseholdId,
+  redeemAdultInvite,
+  requestPasswordReset,
+  resendConfirmation,
+  signIn as cloudSignIn,
+  signUp as cloudSignUp,
+} from '../cloud/sync'
 import { KEYS, saveJSON } from '../platform/storage'
 import { Display, Field, FieldLabel, GhostButton, PrimaryButton, Wordmark } from '../ui/kit'
 
@@ -44,6 +52,15 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
   const [email, setEmail] = useState(cloud ? '' : DEFAULT_EMAIL)
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
+  /**
+   * Which screen we are on.
+   *
+   * `choose` is reached only by a signed-in account with no family — the one
+   * moment where "start a new one" and "join an existing one" are both
+   * plausible and only the person can say which.
+   */
+  const [stage, setStage] = useState<'auth' | 'choose' | 'reset'>('auth')
+  const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -76,24 +93,161 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
         await cloudSignIn(email.trim(), password)
       }
 
-      // Signed in for real from here. The household is created by a database
-      // trigger in the same transaction as the insert, so it can never exist
-      // without a member.
+      // Signed in for real from here.
+      //
+      // Belonging to a family is *asked*, never assumed. This used to call
+      // `ensureHousehold` unconditionally, which creates one when it finds
+      // none — correct for the parent who signed up first, and quietly wrong
+      // for everybody after them. A second parent was handed a brand new empty
+      // "My family" of their own and then reported, entirely fairly, that the
+      // app was not syncing. It was. There was nothing in the household it had
+      // just invented for them, and the family they meant to join was
+      // somewhere else with a code they were never asked for.
       try {
-        const householdId = await ensureHousehold()
-        if (householdId) await saveJSON(HOUSEHOLD_KEY, householdId)
+        const existing = await existingHouseholdId()
+        if (existing) {
+          await saveJSON(HOUSEHOLD_KEY, existing)
+          onSignedIn()
+          return
+        }
+        // No family yet: let them say which they meant.
+        setStage('choose')
+        return
       } catch {
         // Deliberately not fatal. The session is valid; blocking entry over a
-        // failed household lookup would strand a signed-in parent behind a
-        // login screen. CloudBridge retries, and Bluetooth is unaffected.
+        // failed lookup would strand a signed-in parent behind a login screen.
+        // The bridges retry, and Bluetooth is unaffected.
+        onSignedIn()
       }
-
-      onSignedIn()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not sign in.')
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Starts a family of their own. Only from the chooser, never implicitly. */
+  const startFamily = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const id = await ensureHousehold()
+      if (id) await saveJSON(HOUSEHOLD_KEY, id)
+      onSignedIn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not create your family.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Joins the family an invitation points at. */
+  const joinFamily = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const id = await redeemAdultInvite(code.trim().toUpperCase())
+      await saveJSON(HOUSEHOLD_KEY, id)
+      onSignedIn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'That code could not be used.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (stage === 'choose') {
+    return (
+      <div className="flex h-full flex-col overflow-y-auto px-[26px] py-[38px]">
+        <div className="mb-9">
+          <Wordmark />
+        </div>
+        <Display className="mb-1.5 text-[23px]">Which family?</Display>
+        <p className="mb-[26px] text-[13.5px] leading-relaxed text-body">
+          If another parent already set yours up, they can send you a join code
+          from their Family Hub — use it here so you both see the same children.
+        </p>
+
+        {error ? (
+          <div className="mb-4 rounded-[14px] bg-coralBg px-4 py-3 text-[12.5px] text-coralInk">
+            {error}
+          </div>
+        ) : null}
+
+        <FieldLabel>JOIN CODE</FieldLabel>
+        <Field value={code} onChange={setCode} placeholder="ABCD2345" />
+        <div className="mt-3">
+          <PrimaryButton onClick={() => !busy && code.trim() && void joinFamily()}>
+            {busy ? 'Joining…' : 'Join this family'}
+          </PrimaryButton>
+        </div>
+
+        <div className="my-6 border-t border-line" />
+
+        <p className="mb-3 text-[13px] leading-relaxed text-body">
+          Nobody has set one up yet? Start your own — you can invite the other
+          adult afterwards.
+        </p>
+        <GhostButton onClick={() => !busy && void startFamily()}>
+          {busy ? 'Working…' : 'Start a new family'}
+        </GhostButton>
+      </div>
+    )
+  }
+
+  if (stage === 'reset') {
+    return (
+      <div className="flex h-full flex-col overflow-y-auto px-[26px] py-[38px]">
+        <div className="mb-9">
+          <Wordmark />
+        </div>
+        <Display className="mb-1.5 text-[23px]">Reset your password</Display>
+        <p className="mb-[26px] text-[13.5px] leading-relaxed text-body">
+          We'll email you a link. Open it on this phone and you can set a new
+          one.
+        </p>
+
+        {error ? (
+          <div className="mb-4 rounded-[14px] bg-coralBg px-4 py-3 text-[12.5px] text-coralInk">
+            {error}
+          </div>
+        ) : null}
+        {notice ? (
+          <div className="mb-4 rounded-[14px] bg-tint px-4 py-3 text-[12.5px] text-tealInk">
+            {notice}
+          </div>
+        ) : null}
+
+        <FieldLabel>EMAIL</FieldLabel>
+        <Field value={email} onChange={setEmail} placeholder="you@example.com" />
+        <div className="mt-3">
+          <PrimaryButton
+            onClick={() => {
+              if (busy || !email.trim()) return
+              setBusy(true)
+              setError(null)
+              setNotice(null)
+              void requestPasswordReset(email.trim(), `${window.location.origin}/hub`)
+                .then(() =>
+                  // Said the same way whether or not the address exists. "No
+                  // such account" here would turn this box into a way to find
+                  // out who has one.
+                  setNotice('If that address has an account, the link is on its way.'),
+                )
+                .catch((e: unknown) =>
+                  setError(e instanceof Error ? e.message : 'Could not send that email.'),
+                )
+                .finally(() => setBusy(false))
+            }}
+          >
+            {busy ? 'Sending…' : 'Send reset link'}
+          </PrimaryButton>
+        </div>
+        <div className="mt-4">
+          <GhostButton onClick={() => setStage('auth')}>Back to sign in</GhostButton>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -136,8 +290,47 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
               {show ? 'Hide' : 'Show'}
             </button>
           </div>
+          {cloud && mode === 'signin' ? (
+            <button
+              type="button"
+              onClick={() => {
+                setError(null)
+                setNotice(null)
+                setStage('reset')
+              }}
+              className="mt-2 text-[12px] font-bold text-brand"
+            >
+              Forgot your password?
+            </button>
+          ) : null}
         </div>
       </div>
+
+      {/* Only when the failure was specifically an unconfirmed address.
+          Telling somebody to sign up again gets them "already registered",
+          which reads as a dead end when their first email simply never
+          arrived. */}
+      {cloud && error && /confirm/i.test(error) ? (
+        <button
+          type="button"
+          onClick={() => {
+            setBusy(true)
+            void resendConfirmation(email.trim(), `${window.location.origin}/hub`)
+              .then(() => {
+                setError(null)
+                setNotice('Confirmation email sent again. Check your inbox and spam.')
+              })
+              .catch((e: unknown) =>
+                setError(e instanceof Error ? e.message : 'Could not resend that email.'),
+              )
+              .finally(() => setBusy(false))
+          }}
+          disabled={busy || !email.trim()}
+          className="mb-4 w-full rounded-[14px] bg-tint px-4 py-3 text-[12.5px] font-bold text-tealInk disabled:opacity-50"
+        >
+          Send the confirmation email again
+        </button>
+      ) : null}
 
       {notice ? (
         <div className="mb-4 rounded-xl bg-tint px-3.5 py-2.5 text-[12.5px] text-tealInk">

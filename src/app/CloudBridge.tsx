@@ -68,10 +68,15 @@ export function CloudBridge() {
   // yet", which is the truth rather than a duplicate pretending otherwise.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
+    // The stored binding first: it survives the phones being apart, which is
+    // most of the time. The live one then confirms or updates it.
+    for (const pairing of pairings) {
+      if (pairing.cloudChildId) childIds.current.set(pairing.peerId, pairing.cloudChildId)
+    }
     for (const child of liveChildren) {
       if (child.cloudChildId) childIds.current.set(child.deviceId, child.cloudChildId)
     }
-  }, [role, liveChildren])
+  }, [role, liveChildren, pairings])
 
   // Policy up, whenever the version the child enforces changes.
   useEffect(() => {

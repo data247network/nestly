@@ -38,7 +38,7 @@ import { useDevice } from '../platform/device'
 const ROSTER_MS = 60_000
 
 export function NotesBridge() {
-  const { role, children: liveChildren, setNoteChannel, setCloudChildren } = useDevice()
+  const { role, children: liveChildren, pairings, setNoteChannel, setCloudChildren } = useDevice()
   const householdId = useRef<string | null>(null)
   /**
    * One channel per cloud child, reused.
@@ -66,11 +66,19 @@ export function NotesBridge() {
       // Which pairing is which child, straight from the child's own Hello. The
       // account decides who a child is; Bluetooth is only how their phone is
       // reached, so an unenrolled pairing simply has no cloud thread.
+      // Both sources, stored first. A thread that only binds while Bluetooth is
+      // connected is a thread that splits in two the moment the phones are
+      // apart — which is precisely when the notes matter.
       const pairedCloudIds = new Set<string>()
+      const bind = (localId: string, cloudId: string) => {
+        pairedCloudIds.add(cloudId)
+        setNoteChannel(localId, channelFor(cloudId))
+      }
+      for (const pairing of pairings) {
+        if (pairing.cloudChildId) bind(pairing.peerId, pairing.cloudChildId)
+      }
       for (const child of liveChildren) {
-        if (!child.cloudChildId) continue
-        pairedCloudIds.add(child.cloudChildId)
-        setNoteChannel(child.deviceId, channelFor(child.cloudChildId))
+        if (child.cloudChildId) bind(child.deviceId, child.cloudChildId)
       }
 
       const unpaired = house.children.filter((c) => !pairedCloudIds.has(c.id))
@@ -87,7 +95,7 @@ export function NotesBridge() {
       // Offline, or signed out. The threads keep whatever Bluetooth gave them
       // and pick the internet back up on the next pass.
     }
-  }, [liveChildren, setNoteChannel, setCloudChildren, channelFor])
+  }, [liveChildren, pairings, setNoteChannel, setCloudChildren, channelFor])
 
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return

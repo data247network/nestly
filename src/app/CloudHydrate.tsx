@@ -33,9 +33,28 @@ import { useStore } from './store'
 const REFRESH_MS = 15_000
 
 export function CloudHydrate() {
-  const { role, children: liveChildren } = useDevice()
+  const { role, children: liveChildren, pairings } = useDevice()
   const { dispatch } = useStore()
   const householdId = useRef<string | null>(null)
+
+  /**
+   * Cloud child id -> the local id this app files that child under.
+   *
+   * Built from the *pairings*, which are durable, rather than from the live
+   * link, which is empty whenever the phones are apart. Reading it off the live
+   * link is what drew one child twice — a Bluetooth card and a cloud card, same
+   * person, different batteries — for every parent not currently standing next
+   * to their child.
+   */
+  const boundLocalId = useCallback(
+    (cloudId: string): string | null => {
+      const paired = pairings.find((p) => p.cloudChildId === cloudId)
+      if (paired) return paired.peerId
+      const live = liveChildren.find((c) => c.cloudChildId === cloudId)
+      return live?.deviceId ?? null
+    },
+    [pairings, liveChildren],
+  )
 
   /**
    * Maps a cloud child id onto the id this app files its data under.
@@ -46,9 +65,8 @@ export function CloudHydrate() {
    * that has never been paired has no such id and is filed under the cloud one.
    */
   const localIdFor = useCallback(
-    (cloudId: string) =>
-      liveChildren.find((c) => c.cloudChildId === cloudId)?.deviceId ?? cloudId,
-    [liveChildren],
+    (cloudId: string) => boundLocalId(cloudId) ?? cloudId,
+    [boundLocalId],
   )
 
   const pull = useCallback(async () => {
@@ -65,13 +83,13 @@ export function CloudHydrate() {
       // Children with no Bluetooth pairing need a local row before their events
       // mean anything. Ones that are paired already have theirs, and adding a
       // second would duplicate the child.
-      const pairedCloudIds = new Set(
-        liveChildren.map((c) => c.cloudChildId).filter((id): id is string => Boolean(id)),
-      )
       dispatch({
         type: 'syncCloudChildren',
+        // A child already on screen under a pairing id must not be added a
+        // second time under their cloud id. `boundLocalId` answers that from
+        // the durable pairing, so it keeps answering when the radio is down.
         children: house.children
-          .filter((c) => !pairedCloudIds.has(c.id))
+          .filter((c) => boundLocalId(c.id) == null)
           .map((c) => ({ id: c.id, name: c.name, avatar: c.avatar })),
       })
 

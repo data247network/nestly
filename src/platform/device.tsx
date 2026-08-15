@@ -55,6 +55,20 @@ export type Pairing = {
   address: string
   peerName: string
   pairedAt: number
+  /**
+   * The child row on the account this phone was enrolled as, once it says so.
+   *
+   * Remembered here rather than read off the live link, and that distinction is
+   * the whole point. It used to be available only from `Hello`, which arrives
+   * only while Bluetooth is connected — so the moment the two phones were apart
+   * the app could no longer tell that the pairing and the cloud child were the
+   * same person, and drew both. A parent with one child saw two cards for her:
+   * one "Location known" from the radio, one "Linked online" from the server,
+   * with different batteries.
+   *
+   * Written once, when the child first reports it, and kept.
+   */
+  cloudChildId?: string
 }
 
 /** One paired child, as far as the link layer is concerned. */
@@ -335,6 +349,22 @@ export function DeviceProvider({ children }: { children: ReactNode }) {
           {
             onChild: (c) => {
               if (cancelled) return
+              // Remember which account row this phone is, the first time it
+              // says. Everything that has to reconcile the two links — the
+              // child cards, the notes thread, the telemetry mirror — needs
+              // this when the radio is *not* connected, which is exactly when
+              // it would otherwise be unavailable.
+              if (c.cloudChildId) {
+                setPairings((prev) => {
+                  const target = prev.find((p) => p.peerId === pairing.peerId)
+                  if (!target || target.cloudChildId === c.cloudChildId) return prev
+                  const merged = prev.map((p) =>
+                    p.peerId === pairing.peerId ? { ...p, cloudChildId: c.cloudChildId } : p,
+                  )
+                  void saveJSON(KEYS.pairings, merged)
+                  return merged
+                })
+              }
               // Key on the *pairing* id, not the id the child reports. The BLE
               // address is what every other part of the parent app uses, and a
               // child that reinstalls keeps its address but mints a new id.

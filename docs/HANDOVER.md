@@ -315,6 +315,44 @@ Supabase function, and 302s to the APK.
 - Nothing personal is stored: no IP, no user agent. Just when, which button, and
   a two-letter country. An unknown country is stored as null, not guessed.
 
+## Joining a family, not inventing one
+
+`ensureHousehold()` creates a household when it finds none. That is right for
+the parent who signs up first and quietly wrong for everyone after them: the
+second parent signed in, was handed a brand new empty "My family" of their own,
+and reported — entirely fairly — that the app was not syncing. It was. There was
+nothing in the household it had just invented for them, and the family they
+meant to join was elsewhere behind a code they were never asked for.
+
+Sign-in now calls `existingHouseholdId()` first. A member goes straight in; a
+new account is *asked* — join with a code, or start a new family — and
+`ensureHousehold` is only reached from that explicit choice. Never implicitly.
+
+Also on this screen: password reset (`requestPasswordReset` / `setPassword`) and
+**resend confirmation**, which appears only when a sign-in failed specifically
+on an unconfirmed address. Telling somebody to sign up again gets them "already
+registered", a dead end when their first email simply never arrived. The reset
+box answers identically whether or not the address exists, so it cannot be used
+to find out who has an account.
+
+## One child, one card
+
+The app drew a child twice — a "Location known" card from Bluetooth and a
+"Linked online" card from the cloud, same person, different batteries. Every
+consumer read `cloudChildId` off `liveChildren`, which only exists while a BLE
+connection has delivered a `Hello`. Out of range there was nothing to say the
+pairing and the cloud child were the same person.
+
+The binding is now stored on the `Pairing` itself, written the first time a
+child reports it. `CloudHydrate`, `CloudBridge` and `NotesBridge` all read the
+stored one first and the live one second. Reading it off the radio is the bug;
+if you add a fourth consumer, do the same.
+
+Notes gained a tab per child on the parent's phone, for the same reason: every
+child's notes went into one list and anything typed was broadcast to all of
+them, so with two children a note meant for one went to both and the second
+child's thread looked empty.
+
 ## Admin lists
 
 Parents and Families both have a search box. It matches **every word in any

@@ -108,6 +108,64 @@ export async function signOut() {
   if (hasCloud()) await supabase().auth.signOut()
 }
 
+/**
+ * Whether this account already belongs to a family.
+ *
+ * The distinction `ensureHousehold` cannot make. That function creates one when
+ * it finds none, which is right for the parent who signed up first and wrong
+ * for everybody after them — a second parent signing in was handed a brand new
+ * empty "My family" of their own, and then quite reasonably reported that the
+ * app was not syncing. It was; there was nothing in the household it had just
+ * invented for them.
+ */
+export async function existingHouseholdId(): Promise<string | null> {
+  if (!hasCloud()) return null
+  const { data } = await supabase()
+    .from('household_members')
+    .select('household_id')
+    .limit(1)
+    .maybeSingle()
+  return (data?.household_id as string) ?? null
+}
+
+/**
+ * Sends a password reset email.
+ *
+ * `redirectTo` must be listed under Auth → URL Configuration → Redirect URLs or
+ * Supabase quietly substitutes the Site URL, which drops the recovery token and
+ * lands the person on the marketing page wondering what happened.
+ */
+export async function requestPasswordReset(email: string, redirectTo?: string): Promise<void> {
+  if (!hasCloud()) throw new Error('This build has no online service configured.')
+  const { error } = await supabase().auth.resetPasswordForEmail(email.trim(), {
+    ...(redirectTo ? { redirectTo } : {}),
+  })
+  if (error) throw new Error(friendly(error.message))
+}
+
+/** Sets a new password for the session a recovery link established. */
+export async function setPassword(password: string): Promise<void> {
+  const { error } = await supabase().auth.updateUser({ password })
+  if (error) throw new Error(friendly(error.message))
+}
+
+/**
+ * Sends the confirmation email again.
+ *
+ * Worth having its own button rather than telling someone to sign up twice:
+ * signing up again with the same address returns "already registered", which
+ * reads as a dead end to a person whose first email never arrived.
+ */
+export async function resendConfirmation(email: string, redirectTo?: string): Promise<void> {
+  if (!hasCloud()) return
+  const { error } = await supabase().auth.resend({
+    type: 'signup',
+    email: email.trim(),
+    ...(redirectTo ? { options: { emailRedirectTo: redirectTo } } : {}),
+  })
+  if (error) throw new Error(friendly(error.message))
+}
+
 /** Auth errors are written for developers; parents get something actionable. */
 function friendly(message: string): string {
   const m = message.toLowerCase()
