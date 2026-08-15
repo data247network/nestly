@@ -330,10 +330,44 @@ export function PairChild({ onDone }: { onDone?: () => void }) {
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto px-[22px] py-[26px]">
       {adding ? <BackButton onClick={() => setAdding(false)} /> : null}
-      <Display className="text-[20px]">Find your child's phone</Display>
-      <p className="text-[13px] text-body">
+      <Display className="text-[20px]">Add your child's phone</Display>
+      <p className="text-[13px] leading-relaxed text-body">
+        Two ways in. A setup code works wherever they are; Bluetooth needs both
+        phones in the same room.
+      </p>
+
+      {/*
+        The account route first, and it is the one that should be taken.
+        This screen used to offer Bluetooth alone, so a parent setting up a new
+        family had to have their child's phone in their hand — and the code
+        route, which works from anywhere and is what actually links the child to
+        the account, was two taps deep under Settings. Pairing over Bluetooth
+        without enrolling gives a phone that talks to this handset and to
+        nothing else: no map when they are out, no notes, no history if the
+        phone is lost.
+      */}
+      <button
+        type="button"
+        onClick={() => go('household')}
+        className="rounded-2xl bg-brand px-4 py-3.5 text-left text-white transition active:scale-[0.99]"
+      >
+        <span className="block text-[13.5px] font-bold">Send a setup code</span>
+        <span className="mt-0.5 block text-[11.5px] leading-snug opacity-90">
+          Add them to your account and send the code by message. Works from
+          anywhere — they do not need to be with you.
+        </span>
+      </button>
+
+      <div className="flex items-center gap-3">
+        <span className="h-px flex-1 bg-line" />
+        <span className="text-[11px] font-bold text-muted">OR, IN THE SAME ROOM</span>
+        <span className="h-px flex-1 bg-line" />
+      </div>
+
+      <p className="-mt-1 text-[12.5px] leading-relaxed text-body">
         Open Nestly on their phone and choose <b>"This is my child's phone"</b>.
-        Keep both phones close together.
+        Pairing over Bluetooth alone keeps working with no signal at all, but
+        only reaches them when the two phones are close.
       </p>
 
       {error ? (

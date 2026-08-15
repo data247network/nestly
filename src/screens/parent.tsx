@@ -84,11 +84,20 @@ export function Home() {
         ) : (
           <>
             <Display className="text-[21px] leading-tight">Connect your child's phone</Display>
+            {/*
+              The account route named first, because it is the one that works.
+              This used to say "pair the two over Bluetooth" and nothing else,
+              so the very first instruction a new family got required both
+              phones in one room — and left them with a pairing that reaches
+              their child only when they are already next to them.
+            */}
             <p className="text-[13px] leading-relaxed text-body">
-              Install Nestly on their phone, choose "This is my child's phone", then
-              pair the two over Bluetooth. It takes about a minute.
+              Install Nestly on their phone and choose "This is my child's
+              phone". Add them to your account and send a setup code — that
+              works wherever they are. Bluetooth pairing is there too, for when
+              there is no signal at all.
             </p>
-            <PrimaryButton onClick={() => go('pair')}>Pair a device</PrimaryButton>
+            <PrimaryButton onClick={() => go('pair')}>Add their phone</PrimaryButton>
           </>
         )}
       </div>
