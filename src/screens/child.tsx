@@ -159,18 +159,29 @@ function ChildStatus() {
         />
       </div>
 
-      <div className="rounded-2xl bg-cream p-4">
-        <div className="text-[12px] font-bold text-body">WAITING TO SEND</div>
-        <div className="mt-1 text-[15px] font-bold">
-          {agent?.pendingEvents ?? 0} {agent?.pendingEvents === 1 ? 'update' : 'updates'}
+      {/*
+        Only when something is actually waiting.
+
+        This card was unconditional, so a phone that had just sent everything
+        still displayed "WAITING TO SEND — 0 updates", which is a queue notice
+        for an empty queue. Worse, it told the child their updates "go across
+        next time you're near your parent's phone" — untrue since the device
+        started uploading on its own, and precisely the misunderstanding the
+        transparency screen exists to prevent.
+      */}
+      {(agent?.pendingEvents ?? 0) > 0 ? (
+        <div className="rounded-2xl bg-cream p-4">
+          <div className="text-[12px] font-bold text-body">WAITING TO SEND</div>
+          <div className="mt-1 text-[15px] font-bold">
+            {agent?.pendingEvents} {agent?.pendingEvents === 1 ? 'update' : 'updates'}
+          </div>
+          <div className="mt-0.5 text-[12px] leading-snug text-body">
+            {agent?.lastSyncAt ? `Last sent ${ago(agent.lastSyncAt)}. ` : ''}
+            These go over the internet, or over Bluetooth when you are near your
+            parent's phone.
+          </div>
         </div>
-        <div className="mt-0.5 text-[12px] leading-snug text-body">
-          {agent?.lastSyncAt
-            ? `Last sent ${ago(agent.lastSyncAt)}. `
-            : 'Nothing sent yet. '}
-          These go across next time you're near your parent's phone.
-        </div>
-      </div>
+      ) : null}
     </div>
   )
 }
