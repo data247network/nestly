@@ -89,7 +89,8 @@ export function UpgradeHint({
             another.
           </>
         )}{' '}
-        You can carry on — the extra {unit} is charged on top of your plan.
+        You can carry on. Extra places are priced per {unit}, on top of your
+        plan.
       </p>
 
       {addon ? (
@@ -98,8 +99,16 @@ export function UpgradeHint({
             One extra {unit}: {formatPrice(addon.monthly, addon.currency)} a month, or{' '}
             {formatPrice(addon.annual, addon.currency)} a year
           </div>
+          {/*
+            Says what is true today. Billing for extra places is not connected
+            yet — the checkout does not carry the units and no webhook grants
+            them — so a family adding one now is not charged. Claiming otherwise
+            on screen would be a lie told to a customer about money, which is
+            the worst kind to leave lying around while the plumbing catches up.
+          */}
           <div className="mt-0.5 opacity-80">
-            Added to what you already pay, for as long as you keep it.
+            Not billed yet — we are still connecting payment for extra places,
+            so anything you add now is free until we do.
           </div>
         </div>
       ) : null}

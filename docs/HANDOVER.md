@@ -292,6 +292,43 @@ three chances to let somebody past it. `household_addons` is readable by the
 household and **writable only by the service role**, like `subscriptions`:
 entitlement a client can edit is not entitlement.
 
+## Extra places (add-ons) — HALF BUILT, finish this next
+
+A family that exceeds its plan quota and does not want to upgrade can buy extra
+places per unit. **The UI and the database exist; the billing does not.** The
+screen currently says so in as many words — "Not billed yet" — and that sentence
+must come out in the same change that connects payment, not before.
+
+Done:
+
+- `addon_prices` (₦700/£0.38 monthly, ₦7,140/£3.88 yearly), `household_addons`,
+  and `household_limits()` as the single place plan + add-ons are summed.
+- `payments.addon_adults`, `payments.addon_children`, `payments.addons_granted_at`.
+- The gate in `UpgradeHint`: silent within quota, priced past it, with the next
+  tier named as the alternative for anyone adding several.
+
+Still to do, and the order matters:
+
+1. **`stripe-checkout` / `paystack-checkout`** — accept `addonAdults` and
+   `addonChildren`, clamp 0–20. When either is non-zero the session is for the
+   *units only*, not a plan change: amount = units × the `addon_prices` row for
+   that currency. It cannot be a second line item on the plan, because a family
+   on the free tier has a £0 plan line and Stripe rejects that. Write the units
+   onto the `payments` row before the customer leaves, as the amount already is.
+2. **`stripe-webhook` / `paystack-webhook`** — on success, look the payment up by
+   reference and, if it carries units, add them to `household_addons`.
+   **Claim `addons_granted_at` conditionally first** (`where addons_granted_at is
+   null`), exactly as `push-notify` claims `child_events`. Webhooks are retried;
+   granting per delivery hands a family five extra children for one payment.
+3. **Client** — `startAddonCheckout` in `cloud/sync.ts`, wired to a "Add anyway"
+   button on the gate, and remove the "Not billed yet" line.
+4. **Enforcement** — the limit checks still read `planOf()` from the compiled
+   fallback, so a family that has *bought* a place is still told they are over
+   quota. Switch those reads to `household_limits()`.
+
+Note `household_addons` is service-role-only by design: entitlement a client can
+edit is not entitlement, so the grant has to happen in the webhook.
+
 ## Downloads and countries
 
 Both read zero on the admin dashboard because nothing had ever written to
