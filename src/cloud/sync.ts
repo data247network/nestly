@@ -762,6 +762,43 @@ export async function loadPlans(): Promise<PlanRow[]> {
   }))
 }
 
+export type AddonPrice = { currency: string; monthly: number; annual: number }
+
+/**
+ * What one extra adult or child costs, per currency.
+ *
+ * A unit rather than a tier: needing one more child slot should not mean buying
+ * three. Read from the table for the same reason plan prices are — an admin
+ * changing it should not need a release on every phone.
+ */
+export async function loadAddonPrices(): Promise<AddonPrice[]> {
+  if (!hasCloud()) return []
+  const { data } = await supabase()
+    .from('addon_prices')
+    .select('currency, price_monthly, price_annual')
+  return (data ?? []).map((r) => ({
+    currency: r.currency as string,
+    monthly: Number(r.price_monthly),
+    annual: Number(r.price_annual),
+  }))
+}
+
+/** Extra adults and children this household has already bought. */
+export async function loadAddons(
+  householdId: string,
+): Promise<{ adults: number; children: number }> {
+  if (!hasCloud()) return { adults: 0, children: 0 }
+  const { data } = await supabase()
+    .from('household_addons')
+    .select('extra_adults, extra_children')
+    .eq('household_id', householdId)
+    .maybeSingle()
+  return {
+    adults: Number(data?.extra_adults ?? 0),
+    children: Number(data?.extra_children ?? 0),
+  }
+}
+
 export function formatPrice(amount: number, currency: string): string {
   if (amount === 0) return 'Free'
   try {

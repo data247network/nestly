@@ -5,6 +5,8 @@ import {
   loadAdults,
   loadPlanPrices,
   loadPlans,
+  loadAddonPrices,
+  type AddonPrice,
   loadSubscription,
   nextPlanFor,
   openBillingPortal,
@@ -54,23 +56,72 @@ export function UpgradeHint({
 
   const next = plans ? nextPlanFor(plans, { children: needChildren, adults: needAdults }) : null
 
+  const [addon, setAddon] = useState<AddonPrice | null>(null)
+
+  useEffect(() => {
+    void loadAddonPrices()
+      .then((rows) => {
+        // The currency the plan itself is quoted in, so the two figures on
+        // screen are comparable. Mixing £ and ₦ in one sentence is how someone
+        // reads the add-on as the cheaper option by a factor of a thousand.
+        const want = next?.currency ?? 'GBP'
+        setAddon(rows.find((r) => r.currency === want) ?? rows[0] ?? null)
+      })
+      .catch(() => setAddon(null))
+  }, [next?.currency])
+
+  const unit = needAdults ? 'adult' : 'child'
+
   return (
-    <div className="mt-4 rounded-2xl bg-amberBg px-4 py-3.5 text-[12.5px] leading-relaxed text-[#8A5A16]">
-      {needAdults ? (
-        <>Your {currentPlan} plan covers {needAdults - 1} adult{needAdults - 1 === 1 ? '' : 's'}. </>
-      ) : (
-        <>Your {currentPlan} plan covers {currentChildren} children. </>
-      )}
+    <div className="mt-4 rounded-2xl bg-amberBg px-4 py-4 text-[12.5px] leading-relaxed text-[#8A5A16]">
+      <div className="text-[13px] font-bold">
+        That is more than your {currentPlan} plan covers
+      </div>
+      <p className="mt-1">
+        {needAdults ? (
+          <>
+            {currentPlan} includes {needAdults - 1} adult
+            {needAdults - 1 === 1 ? '' : 's'}, and you are adding another.
+          </>
+        ) : (
+          <>
+            {currentPlan} includes {currentChildren} children, and you are adding
+            another.
+          </>
+        )}{' '}
+        You can carry on — the extra {unit} is charged on top of your plan.
+      </p>
+
+      {addon ? (
+        <div className="mt-3 rounded-xl bg-white/70 px-3.5 py-2.5">
+          <div className="font-bold">
+            One extra {unit}: {formatPrice(addon.monthly, addon.currency)} a month, or{' '}
+            {formatPrice(addon.annual, addon.currency)} a year
+          </div>
+          <div className="mt-0.5 opacity-80">
+            Added to what you already pay, for as long as you keep it.
+          </div>
+        </div>
+      ) : null}
+
+      {/* The upgrade is offered second and framed as the alternative, because a
+          family who needs one more slot is usually better off with the unit —
+          and a family who needs several is not. Both numbers are on screen so
+          they can see which they are. */}
       {next ? (
-        <>
-          Upgrade to <b>{next.name}</b> ({formatPrice(next.priceMonthly, next.currency)} a month)
-          if you want to add more adults and children — it covers up to {next.maxChildren}{' '}
-          children and {next.maxParents} adults.
-        </>
+        <p className="mt-3">
+          Adding several? <b>{next.name}</b> is{' '}
+          {formatPrice(next.priceMonthly, next.currency)} a month and covers{' '}
+          {next.maxChildren} children and {next.maxParents} adults — likely
+          cheaper than buying them one at a time.
+        </p>
       ) : plans ? (
-        <>This is already the largest plan available.</>
+        <p className="mt-3">
+          You are already on the largest plan, so extras are the only way to add
+          more.
+        </p>
       ) : (
-        <>Checking plans…</>
+        <p className="mt-3">Checking plans…</p>
       )}
     </div>
   )
@@ -271,21 +322,26 @@ export function Billing({
             {copied ? 'Copied' : 'Copy link'}
           </button>
         </div>
-      ) : canAddAdult ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void inviteAdult()}
-          className="mt-3 rounded-xl border border-line px-4 py-3 text-[13.5px] font-bold text-brand disabled:opacity-50"
-        >
-          {busy ? 'Working…' : '+ Invite another adult'}
-        </button>
       ) : (
-        <UpgradeHint
-          currentPlan={current?.name ?? data.plan}
-          needAdults={adultsUsed + 1}
-          needChildren={data.children.length}
-        />
+        <>
+          {/* Priced, not refused — the same rule as children. Within the limit
+              this says nothing at all. */}
+          {!canAddAdult ? (
+            <UpgradeHint
+              currentPlan={current?.name ?? data.plan}
+              needAdults={adultsUsed + 1}
+              needChildren={data.children.length}
+            />
+          ) : null}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void inviteAdult()}
+            className="mt-3 rounded-xl border border-line px-4 py-3 text-[13.5px] font-bold text-brand disabled:opacity-50"
+          >
+            {busy ? 'Working…' : '+ Invite another adult'}
+          </button>
+        </>
       )}
 
       <div className="mt-9 flex flex-wrap items-center justify-between gap-3">

@@ -628,20 +628,31 @@ function Family({
             </button>
           </div>
         </div>
-      ) : atLimit ? (
-        <UpgradeHint
-          currentPlan={plan.name}
-          currentChildren={plan.children}
-          needChildren={data.children.length + 1}
-        />
       ) : (
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="mt-4 rounded-xl border border-line px-4 py-3 text-[13.5px] font-bold text-brand"
-        >
-          + Add a child
-        </button>
+        <>
+          {/*
+            Being over the limit is priced, not refused. This used to replace
+            the button with an upgrade notice, so a parent with one more child
+            than their tier allows simply could not add them — the answer to
+            "I have a third child" was a locked door. Within the limit nothing
+            appears at all; past it, the cost of carrying on is stated before
+            they do.
+          */}
+          {atLimit ? (
+            <UpgradeHint
+              currentPlan={plan.name}
+              currentChildren={plan.children}
+              needChildren={data.children.length + 1}
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className="mt-4 rounded-xl border border-line px-4 py-3 text-[13.5px] font-bold text-brand"
+          >
+            + Add a child
+          </button>
+        </>
       )}
     </section>
   )
