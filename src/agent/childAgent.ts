@@ -28,9 +28,10 @@ import { isUrgent, publishEndpoint, pushInterval, uplink } from './cloudUplink'
  * deciding which scenario is active, deciding whether the phone should be
  * locked, and appending every transition to a durable log.
  *
- * Nothing here depends on connectivity. The log is the product — when the
- * parent's phone next comes within Bluetooth range, the backlog is handed over
- * and only then trimmed. That is the whole point of a store-and-forward design:
+ * Nothing here depends on connectivity. The log is the product — it is retained
+ * until the cloud (the primary source of truth) or a nearby parent over
+ * Bluetooth has acknowledged it. That is the whole point of a store-and-forward
+ * design:
  * the child being out of range must cost you history, not create gaps.
  */
 
@@ -723,8 +724,8 @@ export class ChildAgent {
    * Deliberately separate from the Bluetooth push and never gated on it: the
    * whole point is to reach a parent who is nowhere near this phone. Failure is
    * ignored — being offline is the expected state, and the log is only trimmed
-   * once the *parent* acknowledges over Bluetooth, so nothing is lost by an
-   * upload that does not land.
+   * once the cloud or a parent acknowledges it, so nothing is lost by an upload
+   * that does not land.
    */
   private async pushCloud(force = false) {
     const now = Date.now()
@@ -761,6 +762,19 @@ export class ChildAgent {
       // scenario re-evaluation, persistence and filter restart all happen
       // exactly once, in one place.
       await this.onMessage(res.policy as Policy)
+    }
+
+    // The server only returns eventsUpTo after the entire submitted batch has
+    // been durably upserted. Retiring that prefix lets a long offline backlog
+    // progress past the first 40 events; failed uploads remain queued for retry
+    // or nearby Bluetooth store-and-forward.
+    if (res.ok && typeof res.eventsUpTo === 'number') {
+      const before = this.state.log.length
+      this.state.log = this.state.log.filter((event) => event.seq > res.eventsUpTo!)
+      if (this.state.log.length !== before) {
+        await this.persist()
+        this.emit({ pendingEvents: this.state.log.length })
+      }
     }
 
     // A parent tapped Locate while this phone was out of Bluetooth range. The

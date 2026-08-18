@@ -169,6 +169,7 @@ Deno.serve(async (req: Request) => {
 
   const now = new Date().toISOString()
   const results: Record<string, unknown> = {}
+  let eventsUpTo: number | undefined
 
   if (body.telemetry) {
     const t = body.telemetry
@@ -185,6 +186,10 @@ Deno.serve(async (req: Request) => {
       updated_at: now,
     })
     results.telemetry = error ? "failed" : "ok"
+    if (error) {
+      console.error("child-sync: telemetry write failed", error)
+      return json({ ok: false, error: "telemetry_write_failed" }, 500)
+    }
   }
 
   if (Array.isArray(body.events) && body.events.length > 0) {
@@ -205,6 +210,11 @@ Deno.serve(async (req: Request) => {
       { onConflict: "child_id,seq", ignoreDuplicates: true },
     )
     results.events = error ? "failed" : events.length
+    if (error) {
+      console.error("child-sync: event write failed", error)
+      return json({ ok: false, error: "event_write_failed" }, 500)
+    }
+    eventsUpTo = Math.max(...events.map((event) => event.seq))
 
     // The upload is already durable at this point, which is the ordering that
     // matters: a notifier that fell over must not cost the parent the event
@@ -227,6 +237,10 @@ Deno.serve(async (req: Request) => {
       updated_at: now,
     })
     results.usage = error ? "failed" : "ok"
+    if (error) {
+      console.error("child-sync: usage write failed", error)
+      return json({ ok: false, error: "usage_write_failed" }, 500)
+    }
   }
 
   /* ------------------------------------------------------------------ notes */
@@ -264,6 +278,10 @@ Deno.serve(async (req: Request) => {
         { onConflict: "client_id", ignoreDuplicates: true },
       )
       results.notes = error ? "failed" : notes.length
+      if (error) {
+        console.error("child-sync: note write failed", error)
+        return json({ ok: false, error: "note_write_failed" }, 500)
+      }
 
       // A note nobody is told about is a note that waits until the parent
       // happens to open the app, which for a message is indistinguishable from
@@ -285,6 +303,10 @@ Deno.serve(async (req: Request) => {
       .in("client_id", body.noteAcks.slice(0, MAX_NOTE_ACKS).map(String))
       .is("delivered_at", null)
     results.noteAcks = error ? "failed" : "ok"
+    if (error) {
+      console.error("child-sync: note acknowledgement failed", error)
+      return json({ ok: false, error: "note_ack_failed" }, 500)
+    }
   }
 
   let notesOut: { id: string; from: string; text: string; ts: number }[] | undefined
@@ -350,6 +372,10 @@ Deno.serve(async (req: Request) => {
       .eq("child_id", childId)
       .is("served_at", null)
     results.locate = error ? "failed" : "ok"
+    if (error) {
+      console.error("child-sync: locate response write failed", error)
+      return json({ ok: false, error: "locate_write_failed" }, 500)
+    }
   }
 
   // Only an unanswered request counts. Without the null check the device would
@@ -380,6 +406,7 @@ Deno.serve(async (req: Request) => {
     ok: true,
     serverTime: now,
     accepted: results,
+    ...(eventsUpTo != null ? { eventsUpTo } : {}),
     policy: policy?.body ?? null,
     policyVersion: policy?.version ?? 0,
     ...(notesOut ? { notes: notesOut } : {}),

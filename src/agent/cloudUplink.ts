@@ -93,11 +93,44 @@ export type UplinkPayload = {
 
 export type UplinkResult = {
   ok: boolean
+  /** Machine-readable reason for an upload that did not reach the cloud. */
+  error?: string
+  /** HTTP status when the server answered. Omitted for local/network failures. */
+  status?: number
+  /** Server acknowledgement of the accepted records. */
+  accepted?: Record<string, unknown>
+  /** Highest event sequence durably stored by the cloud for this request. */
+  eventsUpTo?: number
   /** The policy the parent last published, if the server had a newer one. */
   policy?: unknown
   policyVersion?: number
   /** A parent is waiting on a fresh position. Answer it now, not on the timer. */
   locateNow?: boolean
+}
+
+export type CloudSyncStatus = {
+  lastAttempt: number
+  lastSuccess?: number
+  lastFailure?: number
+  status?: number
+  error?: string
+  accepted?: Record<string, unknown>
+}
+
+async function recordSync(result: UplinkResult): Promise<void> {
+  const previous = await loadJSON<CloudSyncStatus | null>(KEYS.cloudSyncStatus, null)
+  const now = Date.now()
+  await saveJSON(KEYS.cloudSyncStatus, {
+    lastAttempt: now,
+    ...(result.ok
+      ? { lastSuccess: now, status: result.status, accepted: result.accepted }
+      : {
+          lastSuccess: previous?.lastSuccess,
+          lastFailure: now,
+          status: result.status,
+          error: result.error ?? 'upload_failed',
+        }),
+  })
 }
 
 /**
@@ -109,13 +142,27 @@ export type UplinkResult = {
  */
 export async function uplink(payload: UplinkPayload): Promise<UplinkResult> {
   const enrolment = await loadJSON<Enrolment | null>(KEYS.enrolment, null)
-  if (!enrolment?.childId || !enrolment.deviceSecret) return { ok: false }
+  if (!enrolment?.childId || !enrolment.deviceSecret) {
+    const result = { ok: false, error: 'not_enrolled' }
+    await recordSync(result)
+    return result
+  }
+
+  if (!import.meta.env.VITE_SUPABASE_URL) {
+    const result = { ok: false, error: 'cloud_not_configured' }
+    await recordSync(result)
+    return result
+  }
 
   // Checked rather than attempted: a fetch on a dead network can hang for the
   // full timeout, and the agent's tick would block behind it.
   try {
     const status = await Network.getStatus()
-    if (!status.connected) return { ok: false }
+    if (!status.connected) {
+      const result = { ok: false, error: 'offline' }
+      await recordSync(result)
+      return result
+    }
   } catch {
     /* Network plugin unavailable off-device; fall through and just try. */
   }
@@ -151,16 +198,34 @@ export async function uplink(payload: UplinkPayload): Promise<UplinkResult> {
       }),
     })
 
-    if (!res.ok) return { ok: false }
     const body = (await res.json().catch(() => ({}))) as UplinkResult
-    return {
+    if (!res.ok || body.ok === false) {
+      const result = {
+        ok: false,
+        status: res.status,
+        error: body.error ?? `http_${res.status}`,
+      }
+      await recordSync(result)
+      return result
+    }
+    const result = {
       ok: true,
+      status: res.status,
+      accepted: body.accepted,
+      eventsUpTo: body.eventsUpTo,
       policy: body.policy,
       policyVersion: body.policyVersion,
       locateNow: body.locateNow ?? false,
     }
-  } catch {
-    return { ok: false }
+    await recordSync(result)
+    return result
+  } catch (error) {
+    const result = {
+      ok: false,
+      error: error instanceof Error ? error.message : 'network_request_failed',
+    }
+    await recordSync(result)
+    return result
   }
 }
 

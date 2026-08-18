@@ -139,6 +139,12 @@ export const KEYS = {
    * Java, where a change of project would mean editing two languages.
    */
   cloudEndpoint: 'nestly.cloud.endpoint',
+  /**
+   * Most recent result from the child device's cloud transport. Kept separately
+   * from telemetry so a failed upload remains diagnosable after the next agent
+   * tick or an app restart.
+   */
+  cloudSyncStatus: 'nestly.cloud.syncStatus',
 } as const
 
 /** Per-child key suffixes, so each paired device keeps its own cursor. */
