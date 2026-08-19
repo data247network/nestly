@@ -24,6 +24,7 @@ export function CloudHydrate() {
   const { role, children: liveChildren, pairings } = useDevice()
   const { dispatch } = useStore()
   const householdId = useRef<string | null>(null)
+  const cloudChildIds = useRef<string[]>([])
 
   const boundLocalId = useCallback(
     (cloudId: string): string | null => {
@@ -47,6 +48,7 @@ export function CloudHydrate() {
       if (!house) return
 
       const cloudIds = house.children.map((c) => c.id)
+      cloudChildIds.current = cloudIds
       if (cloudIds.length === 0) return
 
       dispatch({
@@ -120,9 +122,7 @@ export function CloudHydrate() {
   // mutates the store directly, so all cloud data continues through one path.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent' || !householdId.current) return
-    const ids = pairings
-      .map((p) => p.cloudChildId)
-      .filter((id): id is string => Boolean(id))
+    const ids = cloudChildIds.current
     if (ids.length === 0) return
 
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -135,7 +135,7 @@ export function CloudHydrate() {
       clearTimeout(timer)
       stop()
     }
-  }, [role, pairings, pull])
+  }, [role, pairings, cloudChildIds.current.length, pull])
 
   // Poll as a recovery path and when the app returns to the foreground.
   useEffect(() => {
