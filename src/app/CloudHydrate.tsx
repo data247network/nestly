@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import {
   loadEventsForChildren,
@@ -24,7 +24,7 @@ export function CloudHydrate() {
   const { role, children: liveChildren, pairings } = useDevice()
   const { dispatch } = useStore()
   const householdId = useRef<string | null>(null)
-  const cloudChildIds = useRef<string[]>([])
+  const [cloudChildIds, setCloudChildIds] = useState<string[]>([])
 
   const boundLocalId = useCallback(
     (cloudId: string): string | null => {
@@ -48,7 +48,7 @@ export function CloudHydrate() {
       if (!house) return
 
       const cloudIds = house.children.map((c) => c.id)
-      cloudChildIds.current = cloudIds
+      setCloudChildIds((current) => current.join(',') === cloudIds.join(',') ? current : cloudIds)
       if (cloudIds.length === 0) return
 
       dispatch({
@@ -101,7 +101,7 @@ export function CloudHydrate() {
     } catch {
       // Offline is expected; retain the last locally available state.
     }
-  }, [dispatch, liveChildren, boundLocalId, localIdFor])
+  }, [dispatch, boundLocalId, localIdFor])
 
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
@@ -121,21 +121,19 @@ export function CloudHydrate() {
   // for the polling interval. The callback only schedules a pull; it never
   // mutates the store directly, so all cloud data continues through one path.
   useEffect(() => {
-    if (!hasCloud() || role !== 'parent' || !householdId.current) return
-    const ids = cloudChildIds.current
-    if (ids.length === 0) return
+    if (!hasCloud() || role !== 'parent' || cloudChildIds.length === 0) return
 
     let timer: ReturnType<typeof setTimeout> | undefined
     const schedulePull = () => {
       clearTimeout(timer)
       timer = setTimeout(() => void pull(), 250)
     }
-    const stop = subscribeToChildren(ids, schedulePull)
+    const stop = subscribeToChildren(cloudChildIds, schedulePull)
     return () => {
       clearTimeout(timer)
       stop()
     }
-  }, [role, pairings, cloudChildIds.current.length, pull])
+  }, [role, cloudChildIds, pull])
 
   // Poll as a recovery path and when the app returns to the foreground.
   useEffect(() => {
