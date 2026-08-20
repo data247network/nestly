@@ -3,9 +3,9 @@ import { hasCloud } from '../cloud/client'
 import {
   loadHousehold,
   resolveHouseholdId,
-  subscribeToChildren,
   type HouseholdSummary,
 } from '../cloud/sync'
+import { subscribeToChildrenSafe } from '../cloud/realtime'
 import { useDevice } from '../platform/device'
 
 /**
@@ -20,13 +20,6 @@ import { useDevice } from '../platform/device'
  * it is fresher and works with no signal — so nothing here writes to the local
  * store or touches policy. A cloud outage costs a parent remote visibility and
  * nothing else.
- */
-/**
- * How often the parent's view re-reads the server while it is on screen.
- *
- * The child uploads telemetry every 60s, so polling faster than this buys
- * nothing but requests; polling slower makes a parent watching a child walk
- * home wait for news that has already arrived.
  */
 const REFRESH_INTERVAL_MS = 15_000
 
@@ -81,7 +74,7 @@ export function useCloudChildren(): {
     // Debounced: a child coming back into signal flushes its whole backlog, and
     // one reload per row would hammer the API for no extra information.
     let pending: ReturnType<typeof setTimeout> | undefined
-    const stop = subscribeToChildren(childKey.split(','), () => {
+    const stop = subscribeToChildrenSafe(childKey.split(','), () => {
       clearTimeout(pending)
       pending = setTimeout(() => void refresh(), 800)
     })
@@ -93,15 +86,6 @@ export function useCloudChildren(): {
   }, [role, childKey, refresh])
 
   // A timed refresh underneath the socket.
-  //
-  // Realtime is the fast path but it is not a guarantee: a websocket that drops
-  // on a phone changing network reconnects silently and the screen simply stops
-  // updating, with nothing on it to say so. Polling means the worst case is
-  // stale by one interval rather than stale until the app is reopened.
-  //
-  // Paused when the app is not on screen. A parent's phone in a pocket polling
-  // all afternoon spends battery to refresh a view nobody is looking at, and
-  // the visibility change itself triggers an immediate catch-up.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent' || !childKey) return
 
