@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main]
 
+# Dependency installation + tsc is intentionally independent of Supabase
+# runtime credentials; it validates the application source without secrets.
 jobs:
   typecheck:
     runs-on: ubuntu-latest
