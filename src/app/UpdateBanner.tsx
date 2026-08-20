@@ -7,17 +7,9 @@ import {
 } from '../platform/updates'
 
 /**
- * Tells a parent there is a newer build, and fetches it on request.
- *
- * Sideloaded apps have no store watching over them, so without this a phone
- * stays on its original build forever. It appears only when there is genuinely
- * something newer — no "you are up to date" banner, which is noise on every
- * launch to say nothing happened.
- *
- * Shown on the parent's phone only. A child cannot be asked to approve an
- * install dialog they have no context for, and a parent updating their own
- * phone is the case that matters: the two ends negotiate a protocol version, so
- * the parent is where a mismatch gets noticed.
+ * Non-blocking updater UI. Update checks must never be part of Nestly's
+ * startup-critical path; a failed check is intentionally invisible unless the
+ * user is already looking at an available update.
  */
 export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus>({ state: 'unsupported' })
@@ -26,10 +18,23 @@ export function UpdateBanner() {
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
+    let cancelled = false
+
     if (!updatesSupported()) return
-    // Once per launch. Polling a manifest on a timer would spend a family's
-    // data to learn nothing on almost every check.
-    void checkForUpdate().then(setStatus)
+
+    // Defer the network/native updater work until after the first paint. The
+    // Nestly UI must be usable even when the manifest, network or updater is
+    // unavailable.
+    const timer = window.setTimeout(() => {
+      void checkForUpdate().then((next) => {
+        if (!cancelled) setStatus(next)
+      })
+    }, 1200)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [])
 
   if (status.state !== 'available' || dismissed) return null
@@ -39,8 +44,6 @@ export function UpdateBanner() {
     setError(null)
     try {
       await installUpdate(status.manifest)
-      // Android's installer takes over here. If the user goes through with it
-      // the app is replaced; if they cancel, this banner is still correct.
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not download the update.')
     } finally {
