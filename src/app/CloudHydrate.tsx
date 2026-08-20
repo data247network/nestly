@@ -5,8 +5,8 @@ import {
   loadHousehold,
   loadUsageForChildren,
   resolveHouseholdId,
-  subscribeToChildren,
 } from '../cloud/sync'
+import { subscribeToChildrenSafe } from '../cloud/realtime'
 import { useDevice } from '../platform/device'
 import { useStore } from './store'
 
@@ -128,7 +128,7 @@ export function CloudHydrate() {
       clearTimeout(timer)
       timer = setTimeout(() => void pull(), 250)
     }
-    const stop = subscribeToChildren(cloudChildIds, schedulePull)
+    const stop = subscribeToChildrenSafe(cloudChildIds, schedulePull)
     return () => {
       clearTimeout(timer)
       stop()
