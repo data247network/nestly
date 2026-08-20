@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { Geolocation } from '@capacitor/geolocation'
 import { hasCloud, supabase } from './client'
 import { KEYS, loadJSON } from '../platform/storage'
@@ -23,11 +24,7 @@ export async function sendParentCommand(
 }
 
 async function childSync(body: Record<string, unknown>) {
-  const res = await fetch(CHILD_SYNC_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  const res = await fetch(CHILD_SYNC_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || data?.ok === false) throw new Error(data?.error ?? `HTTP ${res.status}`)
   return data
@@ -58,19 +55,12 @@ async function execute(command: Command, enrolment: Enrolment) {
 
   if (command.command === 'locate') {
     const permission = await Geolocation.checkPermissions().catch(() => null)
-    if (permission && permission.location !== 'granted') {
-      await Geolocation.requestPermissions()
-    }
+    if (permission && permission.location !== 'granted') await Geolocation.requestPermissions()
     const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 12_000, maximumAge: 0 })
     await childSync({
       childId: enrolment.childId,
       deviceSecret: enrolment.deviceSecret,
-      locateFix: {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude,
-        acc: position.coords.accuracy,
-        ts: position.timestamp,
-      },
+      locateFix: { lat: position.coords.latitude, lng: position.coords.longitude, acc: position.coords.accuracy, ts: position.timestamp },
       telemetry: {
         ts: position.timestamp,
         fix: { lat: position.coords.latitude, lng: position.coords.longitude, acc: position.coords.accuracy },
@@ -82,16 +72,10 @@ async function execute(command: Command, enrolment: Enrolment) {
   return { ok: true }
 }
 
-/**
- * Child-side command pump. Supabase is authoritative; polling is deliberately
- * retained even when Realtime is available so a sleeping/reconnecting phone
- * eventually drains commands without relying on a socket callback.
- */
 export async function pollChildCommands(): Promise<void> {
   if (!hasCloud()) return
   const enrolment = await loadJSON<Enrolment | null>(KEYS.enrolment, null)
   if (!enrolment?.childId || !enrolment.deviceSecret) return
-
   const commands = await claimCommands(enrolment)
   const ack: { id: string; status: 'completed' | 'failed'; result?: Record<string, unknown> }[] = []
   for (const command of commands) {
