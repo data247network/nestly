@@ -1,52 +1,21 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { hasCloud } from '../cloud/client'
-import { loadHousehold, resolveHouseholdId } from '../cloud/sync'
+import { resolveHouseholdId } from '../cloud/sync'
+import { loadCloudRoster } from '../cloud/roster'
 import { parentNoteChannel } from '../cloud/notes'
 import type { NoteChannel } from '../agent/notes'
 import { useDevice } from '../platform/device'
 
 /**
- * Gives the parent's notes an internet path.
- *
- * Notes were the last part of Nestly that could only cross when the two phones
- * were in the same room. Location, events, usage and policy had all moved to
- * the cloud; a note left for a child at school still sat in a queue until they
- * walked back through the door, which is the opposite of what anyone would
- * expect from a message.
- *
- * This component exists rather than the wiring living in `platform/device.tsx`
- * because that file is the offline core and deliberately does not import the
- * cloud client. The child's side needs no equivalent — it authenticates with a
- * device secret against one edge function and builds its own channel.
- *
- * Two jobs, and the second is the one that is easy to miss:
- *
- *   - Bind each *paired* phone to the cloud child it was enrolled as, so one
- *     child does not end up with two threads, one per link.
- *   - Give children who were enrolled online but never paired over Bluetooth a
- *     thread at all. That is now the ordinary setup, and without it the Notes
- *     screen is permanently empty for a family whose account is complete.
+ * Gives the parent's notes an internet path without depending on the full
+ * dashboard query. Notes are a communication channel, so an unrelated
+ * telemetry/aggregate query must never prevent them from being addressed.
  */
-
-/**
- * How often the household roster is re-read.
- *
- * Slow on purpose: this is watching for a child being added or enrolled, which
- * happens a few times in the life of a family. The notes themselves arrive over
- * realtime and each thread's own poll — nothing here is on that path.
- */
-const ROSTER_MS = 60_000
+const ROSTER_MS = 15_000
 
 export function NotesBridge() {
   const { role, children: liveChildren, pairings, setNoteChannel, setCloudChildren } = useDevice()
   const householdId = useRef<string | null>(null)
-  /**
-   * One channel per cloud child, reused.
-   *
-   * Rebuilding it on every render would tear down and re-open a realtime
-   * subscription each time, which reads as a notes screen that intermittently
-   * stops updating.
-   */
   const channels = useRef(new Map<string, NoteChannel>())
 
   const channelFor = useCallback((cloudId: string): NoteChannel => {
@@ -60,20 +29,18 @@ export function NotesBridge() {
   const sync = useCallback(async () => {
     if (!householdId.current) return
     try {
-      const house = await loadHousehold(householdId.current)
-      if (!house) return
+      // Use the isolated roster query. The old implementation called
+      // loadHousehold(), which also embeds telemetry and counts members. If
+      // any unrelated dashboard relation failed, the Notes bridge silently
+      // created no internet channel and a parent note for Eliora stayed local.
+      const roster = await loadCloudRoster(householdId.current)
 
-      // Which pairing is which child, straight from the child's own Hello. The
-      // account decides who a child is; Bluetooth is only how their phone is
-      // reached, so an unenrolled pairing simply has no cloud thread.
-      // Both sources, stored first. A thread that only binds while Bluetooth is
-      // connected is a thread that splits in two the moment the phones are
-      // apart — which is precisely when the notes matter.
       const pairedCloudIds = new Set<string>()
       const bind = (localId: string, cloudId: string) => {
         pairedCloudIds.add(cloudId)
         setNoteChannel(localId, channelFor(cloudId))
       }
+
       for (const pairing of pairings) {
         if (pairing.cloudChildId) bind(pairing.peerId, pairing.cloudChildId)
       }
@@ -81,19 +48,16 @@ export function NotesBridge() {
         if (child.cloudChildId) bind(child.deviceId, child.cloudChildId)
       }
 
-      const unpaired = house.children.filter((c) => !pairedCloudIds.has(c.id))
+      const unpaired = roster.filter((c) => !pairedCloudIds.has(c.id))
       await setCloudChildren(unpaired.map((c) => ({ id: c.id, name: c.name })))
       for (const child of unpaired) setNoteChannel(child.id, channelFor(child.id))
 
-      // Drop channels for children who have left the account, so their realtime
-      // subscription goes with them.
-      const known = new Set(house.children.map((c) => c.id))
+      const known = new Set(roster.map((c) => c.id))
       for (const id of [...channels.current.keys()]) {
         if (!known.has(id)) channels.current.delete(id)
       }
     } catch {
-      // Offline, or signed out. The threads keep whatever Bluetooth gave them
-      // and pick the internet back up on the next pass.
+      // Retry shortly. Existing Bluetooth notes remain usable meanwhile.
     }
   }, [liveChildren, pairings, setNoteChannel, setCloudChildren, channelFor])
 
