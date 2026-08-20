@@ -48,6 +48,28 @@ jobs:
       - name: Ensure Gradle wrapper is executable
         run: chmod +x android/gradlew
 
+      - name: Configure Nestly release signing
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.NESTLY_RELEASE_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.NESTLY_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.NESTLY_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.NESTLY_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_B64" || { echo "Missing NESTLY_RELEASE_KEYSTORE_B64"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "Missing NESTLY_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing NESTLY_KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing NESTLY_KEY_PASSWORD"; exit 1; }
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > android/nestly-release.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=nestly-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          chmod 600 android/nestly-release.jks android/keystore.properties
+
       - name: Build release APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
@@ -73,6 +95,8 @@ jobs:
           ls -lh "$apk"
           echo "APK SHA-256:"
           sha256sum "$apk"
+          echo "APK signing information:"
+          apksigner verify --verbose "$apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -82,3 +106,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/nestly-release.jks android/keystore.properties
