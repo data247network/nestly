@@ -17,78 +17,44 @@
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:exported="true">
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
         </activity>
 
-        <!--
-          Uninstall resistance. While this is active Android refuses to
-          uninstall Nestly and sends the user to Settings to deactivate first,
-          which the app notices and reports.
-        -->
         <receiver
             android:name=".NestlyDeviceAdmin"
             android:exported="true"
             android:permission="android.permission.BIND_DEVICE_ADMIN">
-            <meta-data
-                android:name="android.app.device_admin"
-                android:resource="@xml/device_admin" />
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin" />
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
                 <action android:name="android.app.action.DEVICE_ADMIN_DISABLED" />
             </intent-filter>
         </receiver>
 
-        <!--
-          Defaults for notifications delivered by Firebase while Nestly is not
-          in the foreground. In that case the system builds the notification
-          itself, before any of our code runs, so anything not declared here
-          cannot be set later: without the channel id Android files the alert
-          under a "Miscellaneous" channel it invents, which is silent from
-          Android 8 onward — a safety alert that does not make a sound.
+        <receiver android:name=".NestlyBootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
-          The channel itself is created in src/platform/push.ts. Declaring an id
-          here does not create it; it only says which one to use.
-        -->
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="nestly-alerts" />
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_icon"
-            android:resource="@drawable/ic_stat_nestly" />
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_color"
-            android:resource="@color/nestly_notification" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="nestly-alerts" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_nestly" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_color" android:resource="@color/nestly_notification" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths"></meta-data>
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
 
-        <!--
-          Keeps BLE advertising and location sampling alive on the child device.
-          Both declared types are required from Android 14, and must match what
-          the service actually does or the system kills it on start.
-        -->
-        <service
-            android:name=".NestlyForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="location|connectedDevice" />
+        <service android:name=".NestlyForegroundService" android:exported="false" android:foregroundServiceType="location|connectedDevice" />
 
-        <!--
-          DNS-level web filtering. BIND_VPN_SERVICE is enforced by the system:
-          only Android itself may start this, and only after the child has
-          accepted the VPN consent dialog.
-        -->
         <service
             android:name=".NestlyFilterService"
             android:exported="false"
@@ -99,84 +65,24 @@
         </service>
     </application>
 
-    <!-- Permissions -->
-
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!--
-      Lets the app hand a downloaded update to Android's package installer.
-      Needed because Nestly is sideloaded from nestly.app rather than installed
-      from a store, so nothing else is around to update it. The user still sees
-      and confirms the system install dialog; this only grants the right to ask.
-
-      REMOVE THIS BEFORE PUBLISHING TO GOOGLE PLAY. Play distributes and updates
-      the app itself, and an APK that can install APKs is grounds for rejection
-      under the Device and Network Abuse policy.
-    -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-
-    <!--
-      Draws the lock over other apps. Without it the lock is only a screen
-      inside Nestly, which a child leaves by pressing Home — so a routine that
-      says "no phone at bedtime" did not actually stop anything.
-
-      Granted by the child in Settings, and revocable there. That ceiling is
-      deliberate and disclosed: this is a speed bump the parent can see being
-      removed, not a cage.
-    -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
-    <!--
-      Location is the product. COARSE is requested alongside FINE because from
-      Android 12 the user can grant approximate-only, and the app has to keep
-      working (zone-level accuracy) when they do.
-    -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-
-    <!--
-      Contacts, on the child device only, to tell the parent when a new number
-      appears — an early signal of a stranger making contact. Only additions are
-      reported and only the display name leaves the phone; the number never
-      does, and the child's "What's shared" screen says so.
-    -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
-
-    <!-- Battery level shown on the child cards, and network state for offline mode. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!--
-      Bluetooth. The split is by API level: up to Android 11 the legacy
-      BLUETOOTH/BLUETOOTH_ADMIN grants are install-time and cover everything;
-      from Android 12 they are replaced by the three runtime permissions below.
-      Declaring both sets with maxSdkVersion is what keeps a single APK working
-      across the range.
-    -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-
-    <!-- Foreground service: the child agent must survive backgrounding. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!--
-      Per-app screen time. A "special" permission: it cannot be requested with a
-      runtime prompt, only granted by the child in Settings > Usage access. The
-      app detects it and explains rather than failing silently.
-    -->
-    <uses-permission
-        android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions" />
-
-    <!-- Reading the installed app list, to label usage entries. -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
 
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
