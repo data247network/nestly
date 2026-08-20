@@ -18,7 +18,7 @@ export function CloudBridge() {
   const householdId = useRef<string | null>(null)
   const [ready, setReady] = useState(false)
   const [cloudChildIds, setCloudChildIds] = useState<string[]>([])
-  const lastPolicy = useRef(-1)
+  const lastPushedPolicy = useRef(new Map<string, number>())
 
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
@@ -70,13 +70,14 @@ export function CloudBridge() {
     }
   }, [role, liveChildren, pairings])
 
-  // Cloud policy is authoritative for remote children. PolicyBridge continues
-  // to push the same policy over BLE when a child is physically nearby.
+  // Reconcile policy per child rather than using one global "last policy" flag.
+  // A newly enrolled Darion/Eliora must receive the current policy even when
+  // the parent has not changed a rule since that child was enrolled. A failed
+  // write is deliberately not marked as complete, so it is retried on the next
+  // roster pass instead of becoming permanently invisible to that child.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
     if (!ready || !householdId.current) return
-    if (state.policyVersion === lastPolicy.current) return
-    lastPolicy.current = state.policyVersion
 
     const targets = new Set<string>(cloudChildIds)
     for (const pairing of pairings) {
@@ -84,16 +85,23 @@ export function CloudBridge() {
       if (cloudId) targets.add(cloudId)
     }
 
-    void Promise.all(
-      [...targets].map(async (cloudId) => {
-        try {
-          await pushPolicy(householdId.current!, cloudId, buildPolicy(state, cloudId))
-        } catch {
-          // A later policy change or roster refresh will retry the cloud copy.
-        }
-      }),
-    )
-  }, [role, ready, state.policyVersion, cloudChildIds, pairings])
+    const policyVersion = state.policyVersion
+    for (const cloudId of targets) {
+      if (lastPushedPolicy.current.get(cloudId) === policyVersion) continue
+      void pushPolicy(householdId.current, cloudId, buildPolicy(state, cloudId))
+        .then(() => {
+          lastPushedPolicy.current.set(cloudId, policyVersion)
+        })
+        .catch(() => {
+          // Keep it unmarked so the next roster refresh retries it.
+        })
+    }
+
+    // Remove stale local bookkeeping when a child leaves the household.
+    for (const id of lastPushedPolicy.current.keys()) {
+      if (!targets.has(id)) lastPushedPolicy.current.delete(id)
+    }
+  }, [role, ready, state.policyVersion, state, cloudChildIds, pairings])
 
   // Events up, as they arrive from a paired child device.
   useEffect(() => {
