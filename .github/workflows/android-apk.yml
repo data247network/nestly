@@ -39,6 +39,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Build web assets
+        run: npm run cap:build
+
       - name: Capacitor sync
         run: npx cap sync android
 
