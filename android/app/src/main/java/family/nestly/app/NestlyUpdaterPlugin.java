@@ -21,39 +21,17 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.util.Locale;
 
-/**
- * Over-the-air updates for a sideloaded build.
- *
- * Nestly is installed from nestly.app rather than a store, so nothing else is
- * going to update it — a parent on an old build stays there forever, including
- * through security fixes. This downloads the new APK and hands it to Android's
- * package installer.
- *
- * It does not install anything by itself, and cannot. Android always shows its
- * own confirmation dialog, and the user can refuse; "auto" here means the app
- * notices and fetches, not that it installs behind anyone's back.
- *
- * TWO THINGS THIS DELIBERATELY CHECKS BEFORE OFFERING THE INSTALL:
- *
- *   - The download is verified against a SHA-256 from the manifest. Without it,
- *     anything able to intercept the response could hand the phone a different
- *     APK and the app would politely ask the user to install it.
- *   - The new package must be signed by the same key, which Android enforces on
- *     update. That is what stops a substituted APK replacing Nestly, so the
- *     hash check is defence in depth rather than the only guard.
- *
- * REMOVE BEFORE GOOGLE PLAY. Play updates its own apps, and shipping a
- * self-updater is grounds for removal under Device and Network Abuse.
- */
+/** Safe in-app updater for the sideloaded Nestly Android build. */
 @CapacitorPlugin(name = "NestlyUpdater")
 public class NestlyUpdaterPlugin extends Plugin {
 
     private static final String TAG = "NestlyUpdater";
-    /** Nothing legitimate is this big; a runaway or hostile response stops here. */
     private static final long MAX_BYTES = 80L * 1024 * 1024;
+    private static final String OFFICIAL_HOST = "nestly-gamma-seven.vercel.app";
+    private static final String OFFICIAL_PATH = "/downloads/nestly.apk";
 
-    /** The versionCode this build was compiled with, for comparing to the manifest. */
     @PluginMethod
     public void currentVersion(PluginCall call) {
         try {
@@ -71,7 +49,6 @@ public class NestlyUpdaterPlugin extends Plugin {
         }
     }
 
-    /** Whether the user has allowed this app to install packages. */
     @PluginMethod
     public void canInstall(PluginCall call) {
         JSObject out = new JSObject();
@@ -80,25 +57,23 @@ public class NestlyUpdaterPlugin extends Plugin {
         call.resolve(out);
     }
 
-    /**
-     * Downloads an APK, verifies it, and opens the installer.
-     *
-     * Runs off the main thread: this is a multi-megabyte download over whatever
-     * connection a family happens to have, and blocking the WebView thread would
-     * freeze the app for the duration.
-     */
+    /** Downloads only from the official host, verifies the manifest hash and opens Android's installer. */
     @PluginMethod
     public void downloadAndInstall(PluginCall call) {
         final String url = call.getString("url");
         final String expectedSha = call.getString("sha256");
-        if (url == null || url.isEmpty()) {
-            call.reject("No update URL.");
+        final Integer expectedSize = call.getInt("size");
+
+        if (!isOfficialApkUrl(url)) {
+            call.reject("Update URL is not an official Nestly download.");
             return;
         }
-        // Plain http would make the hash check meaningless: whoever could swap
-        // the APK could swap the manifest that describes it.
-        if (!url.startsWith("https://")) {
-            call.reject("Updates must come over https.");
+        if (expectedSha == null || !expectedSha.matches("(?i)^[a-f0-9]{64}$")) {
+            call.reject("Update checksum is invalid.");
+            return;
+        }
+        if (expectedSize != null && (expectedSize <= 0 || expectedSize > MAX_BYTES)) {
+            call.reject("Update size is invalid.");
             return;
         }
 
@@ -114,11 +89,13 @@ public class NestlyUpdaterPlugin extends Plugin {
                 conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setConnectTimeout(20000);
                 conn.setReadTimeout(60000);
-                conn.setInstanceFollowRedirects(true);
+                conn.setInstanceFollowRedirects(false);
+                conn.setRequestProperty("Accept", "application/vnd.android.package-archive");
                 conn.connect();
 
-                if (conn.getResponseCode() / 100 != 2) {
-                    call.reject("Update download failed (" + conn.getResponseCode() + ").");
+                int code = conn.getResponseCode();
+                if (code != HttpURLConnection.HTTP_OK) {
+                    call.reject("Update download failed (" + code + ").");
                     return;
                 }
 
@@ -129,7 +106,9 @@ public class NestlyUpdaterPlugin extends Plugin {
                     int read;
                     while ((read = in.read(buf)) > 0) {
                         total += read;
-                        if (total > MAX_BYTES) {
+                        if (total > MAX_BYTES || (expectedSize != null && total > expectedSize)) {
+                            //noinspection ResultOfMethodCallIgnored
+                            out.delete();
                             call.reject("Update is unexpectedly large; stopped.");
                             return;
                         }
@@ -138,20 +117,23 @@ public class NestlyUpdaterPlugin extends Plugin {
                     }
                 }
 
-                String actual = hex(digest.digest());
-                if (expectedSha != null && !expectedSha.isEmpty()
-                        && !expectedSha.equalsIgnoreCase(actual)) {
-                    // Delete it. Leaving a file that failed verification in the
-                    // cache invites something else finding and opening it.
+                if (expectedSize != null && total != expectedSize) {
                     //noinspection ResultOfMethodCallIgnored
                     out.delete();
-                    call.reject("This update did not match its signature and was discarded.");
+                    call.reject("Update size did not match the published release.");
+                    return;
+                }
+
+                String actual = hex(digest.digest());
+                if (!expectedSha.equalsIgnoreCase(actual)) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.delete();
+                    call.reject("Update checksum did not match the published release.");
                     return;
                 }
 
                 Uri uri = FileProvider.getUriForFile(
                         getContext(), getContext().getPackageName() + ".fileprovider", out);
-
                 Intent intent = new Intent(Intent.ACTION_VIEW);
                 intent.setDataAndType(uri, "application/vnd.android.package-archive");
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -172,7 +154,6 @@ public class NestlyUpdaterPlugin extends Plugin {
         }, "nestly-update").start();
     }
 
-    /** Opens the system screen where the user grants install permission. */
     @PluginMethod
     public void openInstallSettings(PluginCall call) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -184,9 +165,23 @@ public class NestlyUpdaterPlugin extends Plugin {
         call.resolve();
     }
 
+    private static boolean isOfficialApkUrl(String value) {
+        if (value == null || value.isEmpty()) return false;
+        try {
+            URL u = new URL(value);
+            return "https".equalsIgnoreCase(u.getProtocol())
+                    && OFFICIAL_HOST.equalsIgnoreCase(u.getHost())
+                    && OFFICIAL_PATH.equals(u.getPath())
+                    && (u.getQuery() == null || u.getQuery().isEmpty())
+                    && (u.getRef() == null || u.getRef().isEmpty());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private static String hex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b));
+        for (byte b : bytes) sb.append(String.format(Locale.ROOT, "%02x", b));
         return sb.toString();
     }
 }
