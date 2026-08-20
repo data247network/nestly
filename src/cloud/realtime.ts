@@ -14,13 +14,9 @@ function uniqueChannelName(prefix: string): string {
  * attached before subscribe().
  *
  * Supabase channels cannot accept new postgres_changes callbacks after they
- * have entered the subscribed state. React StrictMode and dependency-driven
- * effect cleanup/re-run can briefly overlap removeChannel() with a new
- * subscription. Reusing a deterministic channel name in that window can make
- * Supabase return the existing subscribed channel, after which `.on()` throws
- * and React's root boundary turns the whole app into a blank/recovery screen.
- * A unique channel per subscription avoids that race; cleanup still removes
- * the exact channel instance that was created here.
+ * have entered the subscribed state. React effect cleanup/re-run can overlap
+ * with channel removal, so deterministic names can accidentally reuse a
+ * subscribed channel. Every subscription gets a unique channel instance.
  */
 export function subscribeToChildrenSafe(
   childIds: string[],
@@ -40,6 +36,27 @@ export function subscribeToChildrenSafe(
     )
   }
 
+  channel.subscribe()
+
+  let removed = false
+  return () => {
+    if (removed) return
+    removed = true
+    void db.removeChannel(channel)
+  }
+}
+
+/** Locate has the same lifecycle rules as the household stream. */
+export function subscribeToLocateSafe(childId: string, onChange: () => void): () => void {
+  if (!hasCloud() || !childId) return () => {}
+  const db = supabase()
+  const channel = db
+    .channel(uniqueChannelName(`locate-${childId}`))
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'locate_requests', filter: `child_id=eq.${childId}` },
+      () => onChange(),
+    )
   channel.subscribe()
 
   let removed = false
