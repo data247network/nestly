@@ -13,69 +13,45 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Calendar;
 
 /**
- * Uploads the child's state to the cloud from native code.
+ * Native child -> cloud bridge used by the foreground service.
  *
- * The JavaScript agent already does this, and for a while that looked like
- * enough. It is not: a WebView's timers are throttled the moment the app leaves
- * the screen and stop altogether once Android decides the process is idle. The
- * evidence was in the data — ten `agent-start` events and nothing between them,
- * because the only uploads that ever happened were the ones in the seconds
- * after someone opened the app. A child's phone in a pocket, which is the
- * normal case and the one the product exists for, was silent for eleven hours.
- *
- * This runs in the foreground service instead, which Android keeps alive
- * precisely so that BLE and location keep working, and is therefore the one
- * place on the child's phone that reliably gets to run.
- *
- * WRITE-ONLY AND IDEMPOTENT, deliberately. It never mutates the state the
- * JavaScript agent owns — no trimming the log, no advancing a cursor, no
- * writing back. It reads what the agent last persisted and posts it. The server
- * upserts events on `(child_id, seq)` and ignores duplicates, so re-sending the
- * same backlog costs a request and changes nothing. That property is what makes
- * two uploaders safe to run against one log; anything cleverer would need
- * locking between a Java service and a JavaScript timer, which is a race
- * waiting to be written.
+ * The JavaScript agent is still the authoritative offline state machine, but
+ * Android may throttle or kill its WebView. The foreground service therefore
+ * keeps the cloud heartbeat alive and, importantly, consumes the latest policy
+ * returned by child-sync so remote lock commands are not dependent on the
+ * WebView being on screen.
  */
 public class NestlyCloudUploader {
 
     private static final String TAG = "NestlyUpload";
-
-    /** Capacitor Preferences keeps everything in this SharedPreferences file. */
     private static final String CAP_STORE = "CapacitorStorage";
-
     private static final String KEY_ENROLMENT = "nestly.enrolment";
     private static final String KEY_CHILD_STATE = "nestly.child.state";
     private static final String KEY_ENDPOINT = "nestly.cloud.endpoint";
 
-    /** Matches the JavaScript cadence so the two paths cannot disagree. */
     static final long INTERVAL_MS = 60_000L;
     static final long LOW_BATTERY_INTERVAL_MS = 5 * 60_000L;
     static final int LOW_BATTERY_PERCENT = 15;
-
-    /** The server caps at 200; sending less keeps a backlog flush cheap. */
     private static final int MAX_EVENTS = 40;
 
     private NestlyCloudUploader() {}
 
-    /** How long to wait before the next attempt, given the battery. */
     static long intervalFor(int batteryPercent) {
         return batteryPercent >= 0 && batteryPercent <= LOW_BATTERY_PERCENT
                 ? LOW_BATTERY_INTERVAL_MS
                 : INTERVAL_MS;
     }
 
-    /**
-     * One upload attempt. Blocking — call it off the main thread.
-     *
-     * @return the battery percentage it observed, or -1 when unknown, so the
-     *         caller can pace the next run without reading it twice.
-     */
     static int runOnce(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences(CAP_STORE, Context.MODE_PRIVATE);
 
@@ -86,8 +62,6 @@ public class NestlyCloudUploader {
         String childId;
         String deviceSecret;
         try {
-            // Capacitor stores JSON.stringify output, so a string value arrives
-            // wrapped in quotes and an object arrives as an object.
             JSONObject enrolment = new JSONObject(enrolmentRaw);
             childId = enrolment.optString("childId", "");
             deviceSecret = enrolment.optString("deviceSecret", "");
@@ -97,38 +71,37 @@ public class NestlyCloudUploader {
         if (childId.isEmpty() || deviceSecret.isEmpty()) return readBattery(ctx);
 
         int battery = readBattery(ctx);
-
         JSONObject body = new JSONObject();
         try {
             body.put("childId", childId);
             body.put("deviceSecret", deviceSecret);
             body.put("telemetry", telemetry(ctx, battery));
-
             JSONArray events = pendingEvents(prefs);
             if (events.length() > 0) body.put("events", events);
         } catch (Exception e) {
             return battery;
         }
 
-        post(endpoint, body.toString());
+        JSONObject response = post(endpoint, body.toString());
+        if (response != null) applyRemotePolicy(ctx, response.optJSONObject("policy"));
         return battery;
     }
 
     /**
-     * Position and battery, from the system rather than from the agent.
-     *
-     * `getLastKnownLocation` rather than requesting a fresh fix: the plugin
-     * already has updates running while the service is alive, so the cached
-     * value is recent, and asking for a new one here would wake the GPS on a
-     * timer that exists to be cheap.
+     * Telemetry reflects the policy currently known locally. In particular it
+     * must never hard-code locked=false: doing so allowed the native uploader to
+     * overwrite a true lock in child_telemetry every minute.
      */
     private static JSONObject telemetry(Context ctx, int battery) throws Exception {
         JSONObject t = new JSONObject();
         t.put("ts", System.currentTimeMillis());
         t.put("battery", battery >= 0 ? battery : JSONObject.NULL);
         t.put("charging", isCharging(ctx));
-        t.put("activeScenarioId", JSONObject.NULL);
-        t.put("locked", false);
+
+        JSONObject policy = readLocalPolicy(ctx);
+        boolean locked = policy != null && isPolicyLocked(policy);
+        t.put("locked", locked);
+        t.put("activeScenarioId", activeScenarioId(policy));
 
         Location best = lastLocation(ctx);
         if (best != null) {
@@ -143,43 +116,118 @@ public class NestlyCloudUploader {
         return t;
     }
 
+    private static JSONObject readLocalPolicy(Context ctx) {
+        try {
+            String raw = ctx.getSharedPreferences(CAP_STORE, Context.MODE_PRIVATE)
+                    .getString(KEY_CHILD_STATE, null);
+            if (raw == null) return null;
+            return new JSONObject(raw).optJSONObject("policy");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Parent lock-now or a currently active scheduled scenario. */
+    private static boolean isPolicyLocked(JSONObject policy) {
+        if (policy == null) return false;
+        if (policy.optBoolean("lockNow", false)) return true;
+        return activeScenarioId(policy) != null;
+    }
+
+    private static String activeScenarioId(JSONObject policy) {
+        if (policy == null) return null;
+        JSONArray scenarios = policy.optJSONArray("scenarios");
+        if (scenarios == null) return null;
+
+        Calendar now = Calendar.getInstance();
+        // Java: Sunday=1..Saturday=7. Protocol: Monday=0..Sunday=6.
+        int day = (now.get(Calendar.DAY_OF_WEEK) + 5) % 7;
+        int minute = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE);
+
+        for (int i = 0; i < scenarios.length(); i++) {
+            JSONObject s = scenarios.optJSONObject(i);
+            if (s == null || !s.optBoolean("enabled", false)) continue;
+            JSONArray days = s.optJSONArray("days");
+            if (days == null || !contains(days, day)) continue;
+            int from = s.optInt("fromMin", 0);
+            int to = s.optInt("toMin", 0);
+            boolean active = from <= to
+                    ? minute >= from && minute < to
+                    : minute >= from || minute < to;
+            if (active) return s.optString("id", null);
+        }
+        return null;
+    }
+
+    private static boolean contains(JSONArray a, int value) {
+        for (int i = 0; i < a.length(); i++) if (a.optInt(i, -1) == value) return true;
+        return false;
+    }
+
+    /** Apply the server's latest policy immediately, without requiring WebView JS. */
+    private static void applyRemotePolicy(Context ctx, JSONObject policy) {
+        if (policy == null) return;
+        boolean locked = isPolicyLocked(policy);
+        if (!NestlyLockOverlay.canDraw(ctx)) return;
+
+        if (!locked) {
+            NestlyLockOverlay.hide();
+            return;
+        }
+
+        String title = policy.optBoolean("lockNow", false)
+                ? "Phone locked"
+                : "Phone locked";
+        String subtitle = "A routine is running.";
+        JSONArray scenarios = policy.optJSONArray("scenarios");
+        String activeId = activeScenarioId(policy);
+        if (activeId != null && scenarios != null) {
+            for (int i = 0; i < scenarios.length(); i++) {
+                JSONObject s = scenarios.optJSONObject(i);
+                if (s != null && activeId.equals(s.optString("id", null))) {
+                    subtitle = s.optString("name", subtitle) + " is running.";
+                    break;
+                }
+            }
+        } else if (policy.optBoolean("lockNow", false)) {
+            subtitle = "Locked by your parent.";
+        }
+
+        java.util.List<String[]> contacts = new java.util.ArrayList<>();
+        JSONArray rawContacts = policy.optJSONArray("contacts");
+        if (rawContacts != null) {
+            for (int i = 0; i < rawContacts.length(); i++) {
+                JSONObject c = rawContacts.optJSONObject(i);
+                if (c == null) continue;
+                String name = c.optString("name", "");
+                String phone = c.optString("phone", "");
+                if (!phone.trim().isEmpty()) contacts.add(new String[] { name, phone });
+            }
+        }
+
+        NestlyLockOverlay.hide();
+        NestlyLockOverlay.show(ctx, title, subtitle, contacts);
+    }
+
     private static Location lastLocation(Context ctx) {
         if (ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED
                 && ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            return null;
-        }
+                != PackageManager.PERMISSION_GRANTED) return null;
         try {
             LocationManager lm = (LocationManager) ctx.getSystemService(Context.LOCATION_SERVICE);
             if (lm == null) return null;
-            Location gps = null;
-            Location net = null;
-            try {
-                gps = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-            } catch (Exception ignored) {
-            }
-            try {
-                net = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-            } catch (Exception ignored) {
-            }
+            Location gps = null, net = null;
+            try { gps = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER); } catch (Exception ignored) {}
+            try { net = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER); } catch (Exception ignored) {}
             if (gps == null) return net;
             if (net == null) return gps;
-            // Newer wins. A stale GPS fix from the last time the child was
-            // outdoors is worse than a fresh coarse one from a cell tower.
             return gps.getTime() >= net.getTime() ? gps : net;
         } catch (Exception e) {
             return null;
         }
     }
 
-    /**
-     * The events the agent has recorded and not yet had acknowledged.
-     *
-     * Read straight out of the agent's persisted state. Nothing is removed —
-     * only the parent's ack over Bluetooth may trim that log, and stealing that
-     * job here would lose history the radio has not delivered yet.
-     */
     private static JSONArray pendingEvents(SharedPreferences prefs) {
         JSONArray out = new JSONArray();
         String raw = prefs.getString(KEY_CHILD_STATE, null);
@@ -187,9 +235,7 @@ public class NestlyCloudUploader {
         try {
             JSONArray log = new JSONObject(raw).optJSONArray("log");
             if (log == null) return out;
-            for (int i = 0; i < log.length() && i < MAX_EVENTS; i++) {
-                out.put(log.getJSONObject(i));
-            }
+            for (int i = 0; i < log.length() && i < MAX_EVENTS; i++) out.put(log.getJSONObject(i));
         } catch (Exception e) {
             Log.w(TAG, "could not read child state: " + e.getMessage());
         }
@@ -211,14 +257,13 @@ public class NestlyCloudUploader {
         try {
             Intent status = ctx.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
             if (status == null) return false;
-            int plugged = status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
-            return plugged != 0;
+            return status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
         } catch (Exception e) {
             return false;
         }
     }
 
-    private static void post(String endpoint, String json) {
+    private static JSONObject post(String endpoint, String json) {
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(endpoint).openConnection();
@@ -231,11 +276,21 @@ public class NestlyCloudUploader {
                 os.write(json.getBytes(StandardCharsets.UTF_8));
             }
             int code = conn.getResponseCode();
-            if (code / 100 != 2) Log.w(TAG, "upload rejected: " + code);
+            InputStream input = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (input == null) return null;
+            StringBuilder text = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) text.append(line);
+            }
+            if (code / 100 != 2) {
+                Log.w(TAG, "upload rejected: " + code);
+                return null;
+            }
+            return new JSONObject(text.toString());
         } catch (Exception e) {
-            // Offline is the normal state for this product, not an error worth
-            // retrying tightly. The next tick tries again.
             Log.d(TAG, "upload failed: " + e.getMessage());
+            return null;
         } finally {
             if (conn != null) conn.disconnect();
         }
