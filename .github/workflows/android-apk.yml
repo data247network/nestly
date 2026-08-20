@@ -52,10 +52,21 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Upload APK
+      - name: Verify release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$apk"
+          echo "APK found: $apk"
+          ls -lh "$apk"
+          sha256sum "$apk"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nestly-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          name: nestly-release-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+          compression-level: 0
           retention-days: 14
