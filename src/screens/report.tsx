@@ -25,7 +25,13 @@ export function ActivityReport() {
   const range = RANGES.find((r) => r.id === state.reportRange) ?? RANGES[0]
 
   const cloudLastSeen = useMemo(
-    () => new Map((household?.children ?? []).map((c) => [c.id, c.lastSeenAt])),
+    () =>
+      new Map(
+        (household?.children ?? []).map((c) => [
+          c.id,
+          normaliseTimestamp(c.lastSeenAt),
+        ]),
+      ),
     [household],
   )
 
@@ -114,6 +120,15 @@ export function ActivityReport() {
       <p className="text-center text-[10.5px] leading-relaxed text-muted">Exports cover only what has synced to this phone. A quiet period may mean the phones were simply apart.</p>
     </div>
   )
+}
+
+function normaliseTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
