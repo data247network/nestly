@@ -57,11 +57,14 @@ export async function installedVersion(): Promise<{
 function validManifest(value: unknown): value is UpdateManifest {
   if (!value || typeof value !== 'object') return false
   const m = value as Partial<UpdateManifest>
-  if (!Number.isInteger(m.versionCode) || m.versionCode <= 0) return false
+
+  // Explicit typeof checks make these values concrete numbers for TypeScript
+  // as well as rejecting null/strings supplied by a malformed manifest.
+  if (typeof m.versionCode !== 'number' || !Number.isInteger(m.versionCode) || m.versionCode <= 0) return false
   if (typeof m.versionName !== 'string' || !m.versionName.trim()) return false
   if (typeof m.url !== 'string') return false
   if (typeof m.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(m.sha256)) return false
-  if (!Number.isInteger(m.size) || m.size <= 0 || m.size > 80 * 1024 * 1024) return false
+  if (typeof m.size !== 'number' || !Number.isInteger(m.size) || m.size <= 0 || m.size > 80 * 1024 * 1024) return false
 
   try {
     const url = new URL(m.url)
@@ -92,10 +95,11 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
       return { state: 'error', message: 'Update information was unreadable.' }
     }
 
-    if (raw.versionCode <= current.versionCode) {
+    const manifest: UpdateManifest = raw
+    if (manifest.versionCode <= current.versionCode) {
       return { state: 'current', versionName: current.versionName }
     }
-    return { state: 'available', manifest: raw, currentVersionName: current.versionName }
+    return { state: 'available', manifest, currentVersionName: current.versionName }
   } catch {
     // Offline is normal for Nestly. Do not interrupt the child/parent experience.
     return { state: 'error', message: 'No connection. Nestly keeps working offline.' }
