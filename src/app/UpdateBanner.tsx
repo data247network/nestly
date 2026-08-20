@@ -7,9 +7,9 @@ import {
 } from '../platform/updates'
 
 /**
- * Non-blocking updater UI. Update checks must never be part of Nestly's
- * startup-critical path; a failed check is intentionally invisible unless the
- * user is already looking at an available update.
+ * Optional, non-critical update UI. Nothing in this component is required for
+ * Nestly to render or operate. The first check is deferred until after the
+ * initial UI paint and all updater failures remain contained here.
  */
 export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus>({ state: 'unsupported' })
@@ -18,18 +18,18 @@ export function UpdateBanner() {
   const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
-
     if (!updatesSupported()) return
 
-    // Defer the network/native updater work until after the first paint. The
-    // Nestly UI must be usable even when the manifest, network or updater is
-    // unavailable.
+    let cancelled = false
     const timer = window.setTimeout(() => {
-      void checkForUpdate().then((next) => {
-        if (!cancelled) setStatus(next)
-      })
-    }, 1200)
+      void checkForUpdate()
+        .then((next) => {
+          if (!cancelled) setStatus(next)
+        })
+        .catch(() => {
+          // An updater failure must never affect the main Nestly experience.
+        })
+    }, 1500)
 
     return () => {
       cancelled = true
@@ -62,13 +62,11 @@ export function UpdateBanner() {
         You have {status.currentVersionName}. {mb} MB.
         {status.manifest.notes ? ` ${status.manifest.notes}` : ''}
       </div>
-
       {error ? (
         <div className="mt-2 rounded-xl bg-coralBg px-3 py-2 text-[11.5px] text-coralInk">
           {error}
         </div>
       ) : null}
-
       <div className="mt-2.5 flex gap-2">
         <button
           type="button"
