@@ -16,18 +16,13 @@ import './index.css'
 import App from './App'
 import { StoreProvider } from './app/store'
 import { DeviceProvider } from './platform/device'
-import { DiagnosticsBoundary, installGlobalDiagnostics } from './app/DiagnosticsBoundary'
-
-installGlobalDiagnostics()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <DiagnosticsBoundary>
-      <DeviceProvider>
-        <StoreProvider>
-          <App />
-        </StoreProvider>
-      </DeviceProvider>
-    </DiagnosticsBoundary>
+    <DeviceProvider>
+      <StoreProvider>
+        <App />
+      </StoreProvider>
+    </DeviceProvider>
   </StrictMode>,
 )
