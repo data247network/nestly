@@ -1,24 +1,15 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 
 /**
- * Over-the-air updates for the sideloaded build.
+ * OTA updates for sideloaded Nestly builds.
  *
- * Nestly is installed from the portal rather than a store, so without this a
- * parent stays on whatever build they first installed — indefinitely, including
- * through fixes to the things that have already bitten us. The app checks a
- * manifest, and if there is something newer it offers to fetch it.
- *
- * It only ever *offers*. Android shows its own install confirmation and the
- * user can decline; nothing installs silently, and nothing can.
- *
- * Not active on the web build, where the browser already has the current code,
- * and there is no APK to replace.
+ * The app checks the published manifest and offers an update when the Android
+ * versionCode is newer. Android still owns the installation confirmation; this
+ * code never installs silently.
  */
-
 export type UpdateManifest = {
   versionCode: number
   versionName: string
-  /** Absolute https URL of the APK. */
   url: string
   sha256: string
   size: number
@@ -34,21 +25,16 @@ export type UpdateStatus =
 type UpdaterPlugin = {
   currentVersion(): Promise<{ versionCode: number; versionName: string }>
   canInstall(): Promise<{ allowed: boolean }>
-  downloadAndInstall(opts: { url: string; sha256?: string }): Promise<{ started: boolean }>
+  downloadAndInstall(opts: { url: string; sha256?: string; size?: number }): Promise<{ started: boolean }>
   openInstallSettings(): Promise<void>
 }
 
 const Updater = registerPlugin<UpdaterPlugin>('NestlyUpdater')
-
-/**
- * Where the manifest lives. Same origin as the setup links, and a build-time
- * constant for the same reason: inside the APK `location.origin` is
- * `https://localhost`, which hosts nothing.
- */
 const ORIGIN = (
   (import.meta.env.VITE_PORTAL_ORIGIN as string | undefined) ??
   'https://nestly-gamma-seven.vercel.app'
 ).replace(/\/+$/, '')
+const MANIFEST_ORIGIN = new URL(ORIGIN).origin
 
 export const MANIFEST_URL = `${ORIGIN}/downloads/latest.json`
 
@@ -56,18 +42,6 @@ export function updatesSupported(): boolean {
   return Capacitor.isNativePlatform()
 }
 
-/**
- * What is actually installed on this phone.
- *
- * Read from the package rather than from the bundle constant, because the two
- * can disagree: `__APP_VERSION__` is baked in at build time and describes the
- * web assets, while `versionCode` is what Android compares when deciding
- * whether an update may be installed. When someone is asking "am I on the
- * latest?", the package is the honest answer.
- *
- * Null off-device, where there is no package and the browser always has the
- * current code.
- */
 export async function installedVersion(): Promise<{
   versionCode: number
   versionName: string
@@ -80,57 +54,66 @@ export async function installedVersion(): Promise<{
   }
 }
 
-/**
- * Compares the installed build against the published one.
- *
- * Compares `versionCode`, never `versionName`. The name is for humans and can
- * legitimately go sideways ("1.0" to "1.0-hotfix"); the code is the integer
- * Android itself uses to decide what constitutes an upgrade, and a downgrade is
- * refused by the installer anyway.
- */
+function validManifest(value: unknown): value is UpdateManifest {
+  if (!value || typeof value !== 'object') return false
+  const m = value as Partial<UpdateManifest>
+  if (!Number.isInteger(m.versionCode) || m.versionCode <= 0) return false
+  if (typeof m.versionName !== 'string' || !m.versionName.trim()) return false
+  if (typeof m.url !== 'string') return false
+  if (typeof m.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(m.sha256)) return false
+  if (!Number.isInteger(m.size) || m.size <= 0 || m.size > 80 * 1024 * 1024) return false
+
+  try {
+    const url = new URL(m.url)
+    // Only the official Nestly HTTPS host may supply an APK. The hash protects
+    // the bytes, while this prevents a compromised manifest from redirecting
+    // the app to an unrelated download host.
+    if (url.protocol !== 'https:' || url.origin !== MANIFEST_ORIGIN) return false
+    if (url.pathname !== '/downloads/nestly.apk') return false
+  } catch {
+    return false
+  }
+  return true
+}
+
 export async function checkForUpdate(): Promise<UpdateStatus> {
   if (!updatesSupported()) return { state: 'unsupported' }
 
   try {
     const current = await Updater.currentVersion()
-
-    // Cache-busted: a stale manifest is the one failure mode that makes this
-    // whole feature pointless, and CDNs cache aggressively by default.
-    const res = await fetch(`${MANIFEST_URL}?t=${Date.now()}`, { cache: 'no-store' })
+    const res = await fetch(`${MANIFEST_URL}?t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    })
     if (!res.ok) return { state: 'error', message: 'Could not check for updates.' }
 
-    const manifest = (await res.json()) as UpdateManifest
-    if (typeof manifest?.versionCode !== 'number' || !manifest.url) {
+    const raw: unknown = await res.json()
+    if (!validManifest(raw)) {
       return { state: 'error', message: 'Update information was unreadable.' }
     }
 
-    if (manifest.versionCode <= current.versionCode) {
+    if (raw.versionCode <= current.versionCode) {
       return { state: 'current', versionName: current.versionName }
     }
-    return { state: 'available', manifest, currentVersionName: current.versionName }
+    return { state: 'available', manifest: raw, currentVersionName: current.versionName }
   } catch {
-    // Offline is the normal case for this app, not an error worth shouting
-    // about — the product is built to work without a connection.
+    // Offline is normal for Nestly. Do not interrupt the child/parent experience.
     return { state: 'error', message: 'No connection. Nestly keeps working offline.' }
   }
 }
 
-/**
- * Downloads and hands the APK to Android's installer.
- *
- * Sends the expected hash so the native side can refuse a download that does
- * not match what the manifest promised.
- */
 export async function installUpdate(manifest: UpdateManifest): Promise<void> {
+  if (!validManifest(manifest)) throw new Error('This update is not a valid Nestly release.')
+
   const { allowed } = await Updater.canInstall()
   if (!allowed) {
-    // Android will not show the install dialog until this is granted, and the
-    // grant is per-app and lives in Settings. Sending them there is the only
-    // way forward.
     await Updater.openInstallSettings()
-    throw new Error(
-      'Allow Nestly to install apps, then tap Update again. Android asks once.',
-    )
+    throw new Error('Allow Nestly to install apps, then tap Update again. Android asks once.')
   }
-  await Updater.downloadAndInstall({ url: manifest.url, sha256: manifest.sha256 })
+
+  await Updater.downloadAndInstall({
+    url: manifest.url,
+    sha256: manifest.sha256,
+    size: manifest.size,
+  })
 }
