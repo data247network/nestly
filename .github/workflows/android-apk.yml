@@ -56,17 +56,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          apk="android/app/build/outputs/apk/release/app-release.apk"
-          test -f "$apk"
+          echo "Searching for release APKs..."
+          find android/app/build/outputs -type f -name '*.apk' -print -exec ls -lh {} \;
+          apk_count=$(find android/app/build/outputs -type f -name '*.apk' | wc -l)
+          if [ "$apk_count" -eq 0 ]; then
+            echo "ERROR: No APK was produced."
+            exit 1
+          fi
+          if [ "$apk_count" -gt 1 ]; then
+            echo "ERROR: Multiple APKs were produced; refusing to upload an ambiguous build."
+            exit 1
+          fi
+          apk=$(find android/app/build/outputs -type f -name '*.apk' -print -quit)
           echo "APK found: $apk"
+          echo "APK size:"
           ls -lh "$apk"
+          echo "APK SHA-256:"
           sha256sum "$apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: nestly-release-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/**/*.apk
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
