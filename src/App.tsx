@@ -26,25 +26,6 @@ export default function App() {
   const { ready, role, onboarded, signedIn, signIn } = useDevice()
   const { state } = useStore()
   const [card, setCard] = useState<0 | 1 | 2>(0)
-  const [cloudCommandsReady, setCloudCommandsReady] = useState(false)
-
-  // Keep the first native paint independent from the cloud command bridge.
-  // This mirrors the Android updater fix: optional background services must not
-  // be able to prevent the primary Nestly UI from becoming visible.
-  useEffect(() => {
-    if (!native || !ready) return
-    let cancelled = false
-    const start = () => {
-      if (!cancelled) setCloudCommandsReady(true)
-    }
-    const raf = window.requestAnimationFrame(start)
-    const timer = window.setTimeout(start, 250)
-    return () => {
-      cancelled = true
-      window.cancelAnimationFrame(raf)
-      window.clearTimeout(timer)
-    }
-  }, [native, ready])
 
   useEffect(() => {
     if (!native) return
@@ -78,7 +59,7 @@ export default function App() {
   if (role === 'child') {
     return (
       <div className="safe-top flex h-full flex-col bg-white">
-        {cloudCommandsReady ? <CloudCommandBridge /> : null}
+        <CloudCommandBridge />
         <UpdateBanner />
         <Screen id="childHome" />
       </div>
@@ -99,7 +80,7 @@ export default function App() {
       <CloudHydrate />
       <NotesBridge />
       <PushBridge />
-      {cloudCommandsReady ? <CloudCommandBridge /> : null}
+      <CloudCommandBridge />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <UpdateBanner />
         <Screen id={screen} />
