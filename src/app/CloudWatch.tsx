@@ -3,9 +3,9 @@ import { hasCloud } from '../cloud/client'
 import {
   loadHousehold,
   resolveHouseholdId,
-  subscribeToChildren,
   type HouseholdSummary,
 } from '../cloud/sync'
+import { subscribeToChildrenSafe } from '../cloud/realtime'
 import { useDevice } from '../platform/device'
 
 /**
@@ -81,7 +81,7 @@ export function useCloudChildren(): {
     // Debounced: a child coming back into signal flushes its whole backlog, and
     // one reload per row would hammer the API for no extra information.
     let pending: ReturnType<typeof setTimeout> | undefined
-    const stop = subscribeToChildren(childKey.split(','), () => {
+    const stop = subscribeToChildrenSafe(childKey.split(','), () => {
       clearTimeout(pending)
       pending = setTimeout(() => void refresh(), 800)
     })
