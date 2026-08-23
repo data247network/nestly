@@ -2,7 +2,7 @@ package family.nestly.app;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.content.SharedPreferences;
 import android.provider.Settings;
 
 import com.getcapacitor.JSObject;
@@ -22,7 +22,19 @@ public class NestlySafetyLockPlugin extends Plugin {
         result.put("lockTaskPermitted", NestlyDeviceOwner.isLockTaskPermitted(getContext()));
         result.put("legacyAdmin", NestlyDeviceAdmin.isActive(getContext()));
         result.put("canLock", NestlyDeviceOwner.isLockTaskPermitted(getContext()));
+
+        SharedPreferences prefs = getContext().getSharedPreferences(
+                NestlyDeviceAdmin.PREFS, android.content.Context.MODE_PRIVATE);
+        result.put("adminDisabledAt", prefs.getLong(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT, 0L));
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void clearTamper(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(
+                NestlyDeviceAdmin.PREFS, android.content.Context.MODE_PRIVATE);
+        prefs.edit().remove(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT).apply();
+        call.resolve();
     }
 
     @PluginMethod
