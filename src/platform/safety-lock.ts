@@ -5,6 +5,7 @@ export type SafetyLockStatus = {
   lockTaskPermitted: boolean
   legacyAdmin: boolean
   canLock: boolean
+  adminDisabledAt: number
 }
 
 type SafetyLockPlugin = {
@@ -12,6 +13,7 @@ type SafetyLockPlugin = {
   configure(): Promise<SafetyLockStatus & { configured: boolean }>
   lock(): Promise<SafetyLockStatus & { locked: boolean }>
   unlock(): Promise<{ unlocked: boolean }>
+  clearTamper(): Promise<void>
   openDeviceOwnerHelp(): Promise<void>
   openAppDetails(): Promise<void>
 }
@@ -23,6 +25,7 @@ const browserStatus: SafetyLockStatus = {
   lockTaskPermitted: false,
   legacyAdmin: false,
   canLock: false,
+  adminDisabledAt: 0,
 }
 
 export async function getSafetyLockStatus(): Promise<SafetyLockStatus> {
@@ -43,6 +46,10 @@ export async function enterSafetyLock() {
 export async function exitSafetyLock() {
   if (!Capacitor.isNativePlatform()) return { unlocked: false }
   return SafetyLock.unlock()
+}
+
+export async function clearSafetyTamper() {
+  if (Capacitor.isNativePlatform()) await SafetyLock.clearTamper()
 }
 
 export async function openDeviceOwnerHelp() {
