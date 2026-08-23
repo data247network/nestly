@@ -4,6 +4,19 @@ Family safety, gently done — location, screen time and safety alerts for a hou
 
 Nestly now uses a **cloud-first architecture** for connected operation, with Bluetooth LE retained as the offline/fallback transport. A single install is either a **parent phone** or a **child phone**, chosen on first run.
 
+## Child-device uninstall and tamper protection
+
+The child build must treat uninstall/tamper protection as a device-management feature, not just an app UI feature.
+
+- **Preferred production mode: Android Device Owner + LockTask.** This is the mode that can enforce a dedicated child-device experience and materially restrict removal/exit paths.
+- **Legacy Device Admin is only a compatibility fallback.** An active device administrator can add friction around uninstall, but a determined user can disable the administrator in Android Settings. The app must not describe legacy Device Admin as uninstall-proof.
+- When an uninstall/removal attempt or protection-disable event is detected, Nestly should enter the child safety lock and show: **“Nestly is protected. Please call your parent to continue.”**
+- Where Device Owner is active, the native layer should use `DevicePolicyManager`/LockTask to keep the child in the managed safety surface and block normal app switching until the parent-controlled recovery path is completed.
+- The event should be recorded locally as a tamper event and synchronised to Supabase when the device is online; the existing notification pipeline should alert the parent.
+- Device Owner provisioning must be explicit during child-device setup. Nestly should show the protection state clearly rather than silently claiming controls it does not have.
+
+This requirement is tracked in GitHub issue #6.
+
 ## How the two devices work now
 
 When internet access is available, the child device uploads telemetry, events, usage snapshots and notes directly to Supabase. The parent app and web Family Hub consume the same cloud state. Supabase Realtime provides live updates, while periodic pulls remain as a recovery path when a socket is unavailable.
@@ -87,9 +100,9 @@ Before the current cloud-first release, the production Supabase security configu
 - `locate_requests` was tightened to `authenticated` household members rather than the `public` role.
 - `household_addons` is no longer publicly readable.
 - Privileged administration RPCs no longer grant `EXECUTE` to `anon` or ordinary `authenticated` users.
-- `claim_device_token` remains callable by authenticated users but not anonymous users.
+- `claim_device_token` is now restricted to the server/service role; ordinary authenticated clients no longer have direct `EXECUTE` access.
 - `rls_auto_enable()` is no longer executable by `anon` or `authenticated`.
-- Supabase's remaining security advisor findings are limited to the intentionally server-managed `admin_users`/`app_downloads` tables and the Auth leaked-password-protection setting. Enable leaked-password protection before public production launch.
+- The remaining Supabase security advisor findings are limited to the intentionally server-managed `admin_users`/`app_downloads` tables and the Auth leaked-password-protection setting. Enable leaked-password protection before public production launch.
 
 ## Running it
 
@@ -247,7 +260,8 @@ The child is explicitly told:
 ## Known limits
 
 - **Real-phone BLE validation is still required.** Browser/loopback tests cannot prove every Android BLE vendor behaviour.
-- **The lock is a soft lock.** Genuine prevention of other apps requires Device Owner enrolment.
+- **Legacy Device Admin is not uninstall-proof.** It can add friction and expose tamper state, but the child can disable it in Android Settings.
+- **Device Owner + LockTask is the production enforcement path.** It requires explicit device provisioning and hardware validation.
 - **Filtering is DNS-level.** It does not inspect encrypted page content and can be bypassed by DNS-over-HTTPS or by disabling the VPN where device-management controls do not prevent it.
 - **Category lists need a maintained feed** for production-grade coverage.
 - **Reboot/background behaviour needs hardware validation** across supported Android versions and manufacturers.
@@ -270,7 +284,7 @@ The cloud service is now part of the product rather than a future placeholder:
 | Push notification pipeline | Live |
 | Web Family Hub | Live |
 | Billing functions | Deployed; provider-specific production validation still required |
-| Device Owner enforcement | Not yet implemented |
+| Device Owner enforcement | Design specified; Android implementation still required |
 | Production-grade content categorisation | Not yet implemented |
 | Public Google Play release | Not yet — internal hardware validation first |
 
