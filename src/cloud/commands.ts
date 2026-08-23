@@ -3,6 +3,7 @@ import { Geolocation } from '@capacitor/geolocation'
 import { hasCloud, supabase } from './client'
 import { KEYS, loadJSON } from '../platform/storage'
 import { NestlyLink } from '../link/ble-peripheral'
+import { enterSafetyLock, exitSafetyLock, getSafetyLockStatus, clearSafetyTamper } from '../platform/safety-lock'
 
 const CHILD_SYNC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/child-sync`
 const COMMAND_SYNC_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/child-command-sync`
@@ -44,13 +45,29 @@ async function claimCommands(enrolment: Enrolment, ack: unknown[] = []) {
 async function execute(command: Command, enrolment: Enrolment) {
   if (command.command === 'lock' || command.command === 'unlock') {
     if (!Capacitor.isNativePlatform()) return { ok: false, error: 'native_only' }
+
+    // Keep the existing emergency-capable overlay, but also enter Android
+    // LockTask when this handset is provisioned as Device Owner. This is the
+    // enforcement boundary: Home/Recents/other apps are no longer escape paths.
+    const native = command.command === 'lock'
+      ? await enterSafetyLock()
+      : await exitSafetyLock()
+
     await NestlyLink.setLocked({
       locked: command.command === 'lock',
-      title: command.command === 'lock' ? 'Phone locked' : '',
-      subtitle: command.command === 'lock' ? 'Locked by your parent.' : '',
+      title: command.command === 'lock' ? 'Nestly is protected' : '',
+      subtitle: command.command === 'lock' ? 'Please call your parent to continue.' : '',
       contacts: [],
     })
-    return { ok: true, locked: command.command === 'lock' }
+
+    if (command.command === 'lock' && !native.locked) {
+      return {
+        ok: false,
+        error: native.deviceOwner ? 'lock_task_failed' : 'device_owner_required',
+        deviceOwner: native.deviceOwner,
+      }
+    }
+    return { ok: true, locked: command.command === 'lock', deviceOwner: native.deviceOwner }
   }
 
   if (command.command === 'locate') {
@@ -72,10 +89,40 @@ async function execute(command: Command, enrolment: Enrolment) {
   return { ok: true }
 }
 
+async function reportLegacyAdminTamper(enrolment: Enrolment) {
+  if (!Capacitor.isNativePlatform()) return
+  const status = await getSafetyLockStatus().catch(() => null)
+  const disabledAt = status?.adminDisabledAt ?? 0
+  if (!disabledAt) return
+
+  // Device Owner should normally make this path unreachable. It exists as a
+  // compatibility witness for older deployments where the legacy admin was
+  // enabled. The event is durable in Supabase and the existing child-sync
+  // notifier turns `tamper` into the parent's push alert.
+  await childSync({
+    childId: enrolment.childId,
+    deviceSecret: enrolment.deviceSecret,
+    events: [{
+      seq: Math.floor(disabledAt / 1000),
+      ts: disabledAt,
+      kind: 'tamper',
+      ref: 'device-admin-disabled',
+      cat: 'uninstall-protection',
+    }],
+    telemetry: { ts: Date.now(), locked: true },
+  }).catch(() => {})
+
+  // Do not report the same legacy-admin tamper on every five-second poll.
+  await clearSafetyTamper().catch(() => {})
+}
+
 export async function pollChildCommands(): Promise<void> {
   if (!hasCloud()) return
   const enrolment = await loadJSON<Enrolment | null>(KEYS.enrolment, null)
   if (!enrolment?.childId || !enrolment.deviceSecret) return
+
+  await reportLegacyAdminTamper(enrolment)
+
   const commands = await claimCommands(enrolment)
   const ack: { id: string; status: 'completed' | 'failed'; result?: Record<string, unknown> }[] = []
   for (const command of commands) {
