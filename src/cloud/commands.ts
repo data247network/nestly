@@ -46,9 +46,6 @@ async function execute(command: Command, enrolment: Enrolment) {
   if (command.command === 'lock' || command.command === 'unlock') {
     if (!Capacitor.isNativePlatform()) return { ok: false, error: 'native_only' }
 
-    // Keep the existing emergency-capable overlay, but also enter Android
-    // LockTask when this handset is provisioned as Device Owner. This is the
-    // enforcement boundary: Home/Recents/other apps are no longer escape paths.
     const native = command.command === 'lock'
       ? await enterSafetyLock()
       : await exitSafetyLock()
@@ -95,15 +92,13 @@ async function reportLegacyAdminTamper(enrolment: Enrolment) {
   const disabledAt = status?.adminDisabledAt ?? 0
   if (!disabledAt) return
 
-  // Device Owner should normally make this path unreachable. It exists as a
-  // compatibility witness for older deployments where the legacy admin was
-  // enabled. The event is durable in Supabase and the existing child-sync
-  // notifier turns `tamper` into the parent's push alert.
   await childSync({
     childId: enrolment.childId,
     deviceSecret: enrolment.deviceSecret,
     events: [{
-      seq: Math.floor(disabledAt / 1000),
+      // Negative sequence numbers are reserved for native/system tamper events
+      // and cannot collide with the child's normal positive event cursor.
+      seq: -Math.floor(disabledAt / 1000),
       ts: disabledAt,
       kind: 'tamper',
       ref: 'device-admin-disabled',
@@ -112,7 +107,6 @@ async function reportLegacyAdminTamper(enrolment: Enrolment) {
     telemetry: { ts: Date.now(), locked: true },
   }).catch(() => {})
 
-  // Do not report the same legacy-admin tamper on every five-second poll.
   await clearSafetyTamper().catch(() => {})
 }
 
