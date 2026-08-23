@@ -43,28 +43,41 @@ async function claimCommands(enrolment: Enrolment, ack: unknown[] = []) {
 }
 
 async function execute(command: Command, enrolment: Enrolment) {
-  if (command.command === 'lock' || command.command === 'unlock') {
+  if (command.command === 'lock') {
     if (!Capacitor.isNativePlatform()) return { ok: false, error: 'native_only' }
 
-    const native = command.command === 'lock'
-      ? await enterSafetyLock()
-      : await exitSafetyLock()
+    const native = await enterSafetyLock()
 
     await NestlyLink.setLocked({
-      locked: command.command === 'lock',
-      title: command.command === 'lock' ? 'Nestly is protected' : '',
-      subtitle: command.command === 'lock' ? 'Please call your parent to continue.' : '',
+      locked: true,
+      title: 'Nestly is protected',
+      subtitle: 'Please call your parent to continue.',
       contacts: [],
     })
 
-    if (command.command === 'lock' && !native.locked) {
+    if (!native.locked) {
       return {
         ok: false,
         error: native.deviceOwner ? 'lock_task_failed' : 'device_owner_required',
         deviceOwner: native.deviceOwner,
       }
     }
-    return { ok: true, locked: command.command === 'lock', deviceOwner: native.deviceOwner }
+
+    return { ok: true, locked: true, deviceOwner: native.deviceOwner }
+  }
+
+  if (command.command === 'unlock') {
+    if (!Capacitor.isNativePlatform()) return { ok: false, error: 'native_only' }
+
+    await exitSafetyLock()
+    await NestlyLink.setLocked({
+      locked: false,
+      title: '',
+      subtitle: '',
+      contacts: [],
+    })
+
+    return { ok: true, locked: false }
   }
 
   if (command.command === 'locate') {
