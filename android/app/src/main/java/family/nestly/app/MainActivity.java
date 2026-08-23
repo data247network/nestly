@@ -7,17 +7,20 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        // The child device's BLE peripheral role has no community plugin, so
-        // it must be registered before the Capacitor bridge is created.
         registerPlugin(NestlyLinkPlugin.class);
+        registerPlugin(NestlySafetyLockPlugin.class);
         super.onCreate(savedInstanceState);
 
-        // The updater is deliberately registered only after the bridge and
-        // WebView have started. A failed updater must never prevent Nestly's
-        // primary UI from loading. The JS side waits until after first paint
-        // before calling this plugin.
         if (getBridge() != null) {
             getBridge().registerPlugin(NestlyUpdaterPlugin.class);
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // A Device Owner child app is expected to remain the foreground safety
+        // surface. The JS agent controls when the lock is entered; this avoids
+        // silently forcing kiosk mode during normal onboarding.
     }
 }
