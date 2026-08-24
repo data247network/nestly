@@ -13,6 +13,9 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -21,107 +24,98 @@ import java.nio.charset.StandardCharsets;
 /**
  * Uploads the child's state to the cloud from native code.
  *
- * The JavaScript agent already does this, and for a while that looked like
- * enough. It is not: a WebView's timers are throttled the moment the app leaves
- * the screen and stop altogether once Android decides the process is idle. The
- * evidence was in the data — ten `agent-start` events and nothing between them,
- * because the only uploads that ever happened were the ones in the seconds
- * after someone opened the app. A child's phone in a pocket, which is the
- * normal case and the one the product exists for, was silent for eleven hours.
+ * The JavaScript agent owns the state and also uploads when its WebView is
+ * active. This native path is the background safety net: it runs from the
+ * foreground service so WebView timer throttling cannot make the child's
+ * cloud record silently go stale.
  *
- * This runs in the foreground service instead, which Android keeps alive
- * precisely so that BLE and location keep working, and is therefore the one
- * place on the child's phone that reliably gets to run.
- *
- * WRITE-ONLY AND IDEMPOTENT, deliberately. It never mutates the state the
- * JavaScript agent owns — no trimming the log, no advancing a cursor, no
- * writing back. It reads what the agent last persisted and posts it. The server
- * upserts events on `(child_id, seq)` and ignores duplicates, so re-sending the
- * same backlog costs a request and changes nothing. That property is what makes
- * two uploaders safe to run against one log; anything cleverer would need
- * locking between a Java service and a JavaScript timer, which is a race
- * waiting to be written.
+ * The uploader is deliberately write-only and idempotent. Events are resent
+ * until the server acknowledges them; the server de-duplicates on
+ * (child_id, seq). No local cursor is advanced here.
  */
 public class NestlyCloudUploader {
 
     private static final String TAG = "NestlyUpload";
-
-    /** Capacitor Preferences keeps everything in this SharedPreferences file. */
     private static final String CAP_STORE = "CapacitorStorage";
-
     private static final String KEY_ENROLMENT = "nestly.enrolment";
     private static final String KEY_CHILD_STATE = "nestly.child.state";
     private static final String KEY_ENDPOINT = "nestly.cloud.endpoint";
+    private static final String KEY_SYNC_STATUS = "nestly.cloud.sync.status";
 
-    /** Matches the JavaScript cadence so the two paths cannot disagree. */
+    /** Public Supabase project URL; native fallback if the WebView cannot start. */
+    private static final String DEFAULT_ENDPOINT =
+            "https://toebajpgzhanrrvyhwmc.supabase.co/functions/v1/child-sync";
+
     static final long INTERVAL_MS = 60_000L;
     static final long LOW_BATTERY_INTERVAL_MS = 5 * 60_000L;
     static final int LOW_BATTERY_PERCENT = 15;
-
-    /** The server caps at 200; sending less keeps a backlog flush cheap. */
     private static final int MAX_EVENTS = 40;
+    private static final int MAX_RESPONSE_CHARS = 8_000;
 
     private NestlyCloudUploader() {}
 
-    /** How long to wait before the next attempt, given the battery. */
     static long intervalFor(int batteryPercent) {
         return batteryPercent >= 0 && batteryPercent <= LOW_BATTERY_PERCENT
                 ? LOW_BATTERY_INTERVAL_MS
                 : INTERVAL_MS;
     }
 
-    /**
-     * One upload attempt. Blocking — call it off the main thread.
-     *
-     * @return the battery percentage it observed, or -1 when unknown, so the
-     *         caller can pace the next run without reading it twice.
-     */
+    /** One upload attempt. Blocking — call it off the main thread. */
     static int runOnce(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences(CAP_STORE, Context.MODE_PRIVATE);
+        int battery = readBattery(ctx);
+        long attemptAt = System.currentTimeMillis();
+        recordAttempt(prefs, attemptAt);
 
-        String endpoint = prefs.getString(KEY_ENDPOINT, null);
+        String endpoint = resolveEndpoint(prefs);
         String enrolmentRaw = prefs.getString(KEY_ENROLMENT, null);
-        if (endpoint == null || enrolmentRaw == null) return readBattery(ctx);
+        if (enrolmentRaw == null) {
+            recordFailure(prefs, attemptAt, -1, "not_enrolled", null);
+            return battery;
+        }
 
         String childId;
         String deviceSecret;
         try {
-            // Capacitor stores JSON.stringify output, so a string value arrives
-            // wrapped in quotes and an object arrives as an object.
             JSONObject enrolment = new JSONObject(enrolmentRaw);
             childId = enrolment.optString("childId", "");
             deviceSecret = enrolment.optString("deviceSecret", "");
         } catch (Exception e) {
-            return readBattery(ctx);
+            recordFailure(prefs, attemptAt, -1, "invalid_enrolment", e.getMessage());
+            return battery;
         }
-        if (childId.isEmpty() || deviceSecret.isEmpty()) return readBattery(ctx);
-
-        int battery = readBattery(ctx);
+        if (childId.isEmpty() || deviceSecret.isEmpty()) {
+            recordFailure(prefs, attemptAt, -1, "not_enrolled", null);
+            return battery;
+        }
 
         JSONObject body = new JSONObject();
         try {
             body.put("childId", childId);
             body.put("deviceSecret", deviceSecret);
             body.put("telemetry", telemetry(ctx, battery));
-
             JSONArray events = pendingEvents(prefs);
             if (events.length() > 0) body.put("events", events);
         } catch (Exception e) {
+            recordFailure(prefs, attemptAt, -1, "payload_build_failed", e.getMessage());
             return battery;
         }
 
-        post(endpoint, body.toString());
+        post(prefs, endpoint, body.toString(), attemptAt);
         return battery;
     }
 
-    /**
-     * Position and battery, from the system rather than from the agent.
-     *
-     * `getLastKnownLocation` rather than requesting a fresh fix: the plugin
-     * already has updates running while the service is alive, so the cached
-     * value is recent, and asking for a new one here would wake the GPS on a
-     * timer that exists to be cheap.
-     */
+    /** Prefer the current endpoint, but reject retired/stale project URLs. */
+    private static String resolveEndpoint(SharedPreferences prefs) {
+        String configured = prefs.getString(KEY_ENDPOINT, null);
+        if (configured != null && configured.startsWith("https://")
+                && configured.contains("/functions/v1/child-sync")
+                && configured.contains("toebajpgzhanrrvyhwmc.supabase.co")) {
+            return configured;
+        }
+        return DEFAULT_ENDPOINT;
+    }
+
     private static JSONObject telemetry(Context ctx, int battery) throws Exception {
         JSONObject t = new JSONObject();
         t.put("ts", System.currentTimeMillis());
@@ -147,39 +141,22 @@ public class NestlyCloudUploader {
         if (ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED
                 && ctx.checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            return null;
-        }
+                != PackageManager.PERMISSION_GRANTED) return null;
         try {
             LocationManager lm = (LocationManager) ctx.getSystemService(Context.LOCATION_SERVICE);
             if (lm == null) return null;
             Location gps = null;
             Location net = null;
-            try {
-                gps = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-            } catch (Exception ignored) {
-            }
-            try {
-                net = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-            } catch (Exception ignored) {
-            }
+            try { gps = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER); } catch (Exception ignored) {}
+            try { net = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER); } catch (Exception ignored) {}
             if (gps == null) return net;
             if (net == null) return gps;
-            // Newer wins. A stale GPS fix from the last time the child was
-            // outdoors is worse than a fresh coarse one from a cell tower.
             return gps.getTime() >= net.getTime() ? gps : net;
         } catch (Exception e) {
             return null;
         }
     }
 
-    /**
-     * The events the agent has recorded and not yet had acknowledged.
-     *
-     * Read straight out of the agent's persisted state. Nothing is removed —
-     * only the parent's ack over Bluetooth may trim that log, and stealing that
-     * job here would lose history the radio has not delivered yet.
-     */
     private static JSONArray pendingEvents(SharedPreferences prefs) {
         JSONArray out = new JSONArray();
         String raw = prefs.getString(KEY_CHILD_STATE, null);
@@ -187,6 +164,7 @@ public class NestlyCloudUploader {
         try {
             JSONArray log = new JSONObject(raw).optJSONArray("log");
             if (log == null) return out;
+            // Always send the oldest prefix so eventsUpTo can advance safely.
             for (int i = 0; i < log.length() && i < MAX_EVENTS; i++) {
                 out.put(log.getJSONObject(i));
             }
@@ -211,33 +189,99 @@ public class NestlyCloudUploader {
         try {
             Intent status = ctx.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
             if (status == null) return false;
-            int plugged = status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
-            return plugged != 0;
+            return status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0;
         } catch (Exception e) {
             return false;
         }
     }
 
-    private static void post(String endpoint, String json) {
+    private static void post(SharedPreferences prefs, String endpoint, String json, long attemptAt) {
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(endpoint).openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setConnectTimeout(15_000);
-            conn.setReadTimeout(20_000);
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("User-Agent", "Nestly-Android-Child-Sync/1.17");
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(15_000);
             conn.setDoOutput(true);
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(json.getBytes(StandardCharsets.UTF_8));
             }
             int code = conn.getResponseCode();
-            if (code / 100 != 2) Log.w(TAG, "upload rejected: " + code);
+            String response = readResponse(code >= 200 && code < 400
+                    ? conn.getInputStream() : conn.getErrorStream());
+            if (code >= 200 && code < 300) {
+                recordSuccess(prefs, attemptAt, code, response);
+                Log.d(TAG, "cloud sync ok: HTTP " + code);
+            } else {
+                recordFailure(prefs, attemptAt, code, "http_" + code, response);
+                Log.w(TAG, "cloud sync rejected: HTTP " + code + " " + response);
+            }
         } catch (Exception e) {
-            // Offline is the normal state for this product, not an error worth
-            // retrying tightly. The next tick tries again.
-            Log.d(TAG, "upload failed: " + e.getMessage());
+            recordFailure(prefs, attemptAt, -1, e.getClass().getSimpleName(), e.getMessage());
+            Log.d(TAG, "cloud sync failed: " + e.getMessage());
         } finally {
             if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static String readResponse(InputStream stream) {
+        if (stream == null) return null;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            StringBuilder out = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null && out.length() < MAX_RESPONSE_CHARS) {
+                if (out.length() > 0) out.append('\n');
+                out.append(line);
+            }
+            return out.toString();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static void recordAttempt(SharedPreferences prefs, long now) {
+        try {
+            JSONObject s = readStatus(prefs);
+            s.put("lastAttempt", now);
+            prefs.edit().putString(KEY_SYNC_STATUS, s.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private static void recordSuccess(SharedPreferences prefs, long now, int code, String response) {
+        try {
+            JSONObject s = readStatus(prefs);
+            s.put("lastAttempt", now);
+            s.put("lastSuccess", now);
+            s.put("status", code);
+            s.remove("lastFailure");
+            s.remove("error");
+            if (response != null) s.put("response", response);
+            prefs.edit().putString(KEY_SYNC_STATUS, s.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private static void recordFailure(SharedPreferences prefs, long now, int code,
+                                      String error, String response) {
+        try {
+            JSONObject s = readStatus(prefs);
+            s.put("lastAttempt", now);
+            s.put("lastFailure", now);
+            if (code >= 0) s.put("status", code);
+            s.put("error", error);
+            if (response != null) s.put("response", response);
+            prefs.edit().putString(KEY_SYNC_STATUS, s.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private static JSONObject readStatus(SharedPreferences prefs) {
+        try {
+            String raw = prefs.getString(KEY_SYNC_STATUS, null);
+            return raw == null ? new JSONObject() : new JSONObject(raw);
+        } catch (Exception e) {
+            return new JSONObject();
         }
     }
 }

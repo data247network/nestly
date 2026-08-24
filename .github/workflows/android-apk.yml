@@ -98,6 +98,15 @@ jobs:
           echo "APK signing information:"
           apksigner verify --verbose "$apk"
 
+          expected_code=$(awk '/versionCode[[:space:]]+[0-9]+/ { print $2; exit }' android/app/build.gradle)
+          expected_name=$(sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' android/app/build.gradle | head -n1)
+          actual_code=$(aapt dump badging "$apk" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          actual_name=$(aapt dump badging "$apk" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          echo "Gradle version: $expected_code ($expected_name)"
+          echo "APK version:    $actual_code ($actual_name)"
+          test "$expected_code" = "$actual_code" || { echo "ERROR: APK versionCode does not match build.gradle"; exit 1; }
+          test "$expected_name" = "$actual_name" || { echo "ERROR: APK versionName does not match build.gradle"; exit 1; }
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:

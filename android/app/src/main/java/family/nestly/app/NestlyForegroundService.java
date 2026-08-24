@@ -18,30 +18,13 @@ import androidx.core.app.NotificationCompat;
 /**
  * Keeps the Nestly child agent alive.
  *
- * Two things depend on this. BLE advertising and the GATT server are torn down
- * by the system once the hosting process is cached, and location updates stop
- * being delivered to a backgrounded app. A foreground service is the only
- * supported way to keep either running, and from Android 14 it must declare
- * exactly which types it is for.
- *
- * The notification is not optional decoration — Android requires it, and it is
- * also the honest thing to show: the child can always see that the agent is
- * running, which is the same promise the transparency screen makes.
+ * BLE, location and the native cloud uploader all depend on this service. The
+ * service is deliberately promoted to foreground before any uploader work is
+ * scheduled, so a slow device or a future uploader change cannot jeopardise
+ * Android's foreground-start deadline.
  */
 public class NestlyForegroundService extends Service {
 
-    /**
-     * The cloud uploader lives here rather than in the WebView.
-     *
-     * A WebView's timers are throttled the moment the app leaves the screen and
-     * stop once the process goes idle, so the JavaScript agent only ever
-     * uploaded in the seconds after someone opened the app. This service is
-     * already kept alive for BLE and location, which makes it the one place on
-     * a child's phone that reliably gets to run.
-     *
-     * Its own thread: the work is a blocking HTTP request, and the main thread
-     * is where the notification and the rest of the app live.
-     */
     private HandlerThread uploadThread;
     private Handler uploadHandler;
 
@@ -52,9 +35,7 @@ public class NestlyForegroundService extends Service {
             try {
                 battery = NestlyCloudUploader.runOnce(getApplicationContext());
             } catch (Throwable t) {
-                // Never let an upload take the service down with it. The child
-                // being supervised does not depend on the cloud, and a crash
-                // loop here would stop BLE and location too.
+                // Cloud sync must never be able to take BLE/location down.
             }
             if (uploadHandler != null) {
                 uploadHandler.postDelayed(this, NestlyCloudUploader.intervalFor(battery));
@@ -64,7 +45,6 @@ public class NestlyForegroundService extends Service {
 
     public static final String CHANNEL_ID = "nestly_agent";
     public static final int NOTIFICATION_ID = 1001;
-
     public static final String EXTRA_TEXT = "text";
 
     public static void start(Context context, String text) {
@@ -89,11 +69,11 @@ public class NestlyForegroundService extends Service {
 
         createChannel();
         Notification notification = buildNotification(text);
-        startUploads();
 
+        // Promote first. Android gives a foreground service only a short window
+        // after startForegroundService(); do not spend that window initialising
+        // background work.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Android 14 rejects a foreground service whose declared type does
-            // not match what it actually does.
             startForeground(
                     NOTIFICATION_ID,
                     notification,
@@ -104,21 +84,21 @@ public class NestlyForegroundService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        // Restart if the system reclaims us: an agent that silently stops is
-        // worse than one that never started, because the parent sees stale data
-        // and assumes it is current.
+        startUploads();
+
+        // Restart if Android reclaims the process. The service is also started
+        // again whenever the child agent comes back to the foreground.
         return START_STICKY;
     }
 
-    /** Idempotent: onStartCommand runs again on every restart and re-delivery. */
+    /** Idempotent: onStartCommand can be delivered more than once. */
     private void startUploads() {
         if (uploadThread != null) return;
         uploadThread = new HandlerThread("nestly-upload");
         uploadThread.start();
         uploadHandler = new Handler(uploadThread.getLooper());
-        // Immediately, then on its own cadence. The first run matters most:
-        // it is the one that catches up whatever accumulated while the phone
-        // was asleep.
+        // Immediately catch up anything that accumulated while the phone was
+        // asleep, then continue at the battery-aware cadence.
         uploadHandler.post(uploadTick);
     }
 
@@ -139,8 +119,6 @@ public class NestlyForegroundService extends Service {
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "Nestly agent",
-                // LOW: persistent, but never makes a sound. This sits in the
-                // shade all day; anything higher would be hostile.
                 NotificationManager.IMPORTANCE_LOW
         );
         channel.setDescription("Shows while Nestly is looking after this phone.");
