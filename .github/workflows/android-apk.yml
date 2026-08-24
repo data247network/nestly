@@ -39,6 +39,17 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android Build Tools 34.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "build-tools;34.0.0"
+          echo "$ANDROID_HOME/build-tools/34.0.0" >> "$GITHUB_PATH"
+          echo "ANDROID_BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0" >> "$GITHUB_ENV"
+          echo "Android Build Tools: $ANDROID_HOME/build-tools/34.0.0"
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" version
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" --version
+
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
@@ -141,9 +152,9 @@ jobs:
           const apk = readFileSync('public/downloads/nestly.apk')
           const sha256 = createHash('sha256').update(apk).digest('hex')
           const size = apk.length
-          const actualCode = execFileSync('aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
+          const actualCode = execFileSync(process.env.AAPT_PATH || 'aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
             .match(/versionCode='([^']+)'/)?.[1]
-          const actualName = execFileSync('aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
+          const actualName = execFileSync(process.env.AAPT_PATH || 'aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
             .match(/versionName='([^']+)'/)?.[1]
           if (String(versionCode) !== actualCode || versionName !== actualName) {
             throw new Error(`APK version ${actualCode}/${actualName} does not match Gradle ${versionCode}/${versionName}`)
