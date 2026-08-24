@@ -39,7 +39,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         // A Device Owner child app is expected to remain the foreground safety
         // surface. The JS agent controls when the lock is entered; this avoids
