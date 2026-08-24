@@ -8,8 +8,8 @@ import android.provider.Settings;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
-import com.getcapacitor.annotation.PluginMethod;
 
 /** Capacitor bridge for child-device safety locking and Device Owner status. */
 @CapacitorPlugin(name = "NestlySafetyLock")
