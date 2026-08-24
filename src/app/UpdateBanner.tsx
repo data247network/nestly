@@ -7,21 +7,23 @@ import {
 } from '../platform/updates'
 
 /**
- * Optional, non-critical update UI. Nothing in this component is required for
- * Nestly to render or operate. The first check is deferred until after the
- * initial UI paint and all updater failures remain contained here.
+ * Update UI for sideloaded Android builds.
+ *
+ * The banner checks after the first paint, again when the app returns to the
+ * foreground, and periodically while it remains open. "Later" is only a
+ * temporary snooze so a missed update cannot disappear permanently.
  */
 export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus>({ state: 'unsupported' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [dismissed, setDismissed] = useState(false)
+  const [snoozedUntil, setSnoozedUntil] = useState(0)
 
   useEffect(() => {
     if (!updatesSupported()) return
 
     let cancelled = false
-    const timer = window.setTimeout(() => {
+    const check = () => {
       void checkForUpdate()
         .then((next) => {
           if (!cancelled) setStatus(next)
@@ -29,15 +31,27 @@ export function UpdateBanner() {
         .catch(() => {
           // An updater failure must never affect the main Nestly experience.
         })
-    }, 1500)
+    }
+
+    const first = window.setTimeout(check, 1000)
+    const periodic = window.setInterval(check, 15 * 60 * 1000)
+    const onResume = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+
+    document.addEventListener('visibilitychange', onResume)
+    window.addEventListener('focus', check)
 
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
+      window.clearTimeout(first)
+      window.clearInterval(periodic)
+      document.removeEventListener('visibilitychange', onResume)
+      window.removeEventListener('focus', check)
     }
   }, [])
 
-  if (status.state !== 'available' || dismissed) return null
+  if (status.state !== 'available' || Date.now() < snoozedUntil) return null
 
   const run = async () => {
     setBusy(true)
@@ -78,7 +92,7 @@ export function UpdateBanner() {
         </button>
         <button
           type="button"
-          onClick={() => setDismissed(true)}
+          onClick={() => setSnoozedUntil(Date.now() + 6 * 60 * 60 * 1000)}
           className="rounded-xl px-3 py-2 text-[12.5px] font-bold text-tealInk"
         >
           Later
