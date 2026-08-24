@@ -103,9 +103,6 @@ public class NestlyForegroundService extends Service {
         createUpdateChannel();
         Notification notification = buildNotification(text);
 
-        // Promote first. Android gives a foreground service only a short window
-        // after startForegroundService(); do not spend that window initialising
-        // background work.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                     NOTIFICATION_ID,
@@ -118,22 +115,15 @@ public class NestlyForegroundService extends Service {
         }
 
         startUploads();
-
-        // Restart if Android reclaims the process. The service is also started
-        // again whenever the child agent comes back to the foreground.
         return START_STICKY;
     }
 
-    /** Idempotent: onStartCommand can be delivered more than once. */
     private void startUploads() {
         if (uploadThread != null) return;
         uploadThread = new HandlerThread("nestly-upload");
         uploadThread.start();
         uploadHandler = new Handler(uploadThread.getLooper());
-        // Immediately catch up anything that accumulated while the phone was
-        // asleep, then continue at the battery-aware cadence.
         uploadHandler.post(uploadTick);
-        // Check for a newer APK without making the WebView responsible for it.
         uploadHandler.post(updateCheckTick);
     }
 
@@ -150,12 +140,8 @@ public class NestlyForegroundService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null || nm.getNotificationChannel(CHANNEL_ID) != null) return;
-
         NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                "Nestly agent",
-                NotificationManager.IMPORTANCE_LOW
-        );
+                CHANNEL_ID, "Nestly agent", NotificationManager.IMPORTANCE_LOW);
         channel.setDescription("Shows while Nestly is looking after this phone.");
         channel.setShowBadge(false);
         nm.createNotificationChannel(channel);
@@ -165,12 +151,8 @@ public class NestlyForegroundService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null || nm.getNotificationChannel(UPDATE_CHANNEL_ID) != null) return;
-
         NotificationChannel channel = new NotificationChannel(
-                UPDATE_CHANNEL_ID,
-                "App updates",
-                NotificationManager.IMPORTANCE_DEFAULT
-        );
+                UPDATE_CHANNEL_ID, "App updates", NotificationManager.IMPORTANCE_DEFAULT);
         channel.setDescription("Notifies you when a newer Nestly app is ready to install.");
         channel.setShowBadge(true);
         nm.createNotificationChannel(channel);
@@ -182,7 +164,6 @@ public class NestlyForegroundService extends Service {
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags |= PendingIntent.FLAG_IMMUTABLE;
         PendingIntent pi = PendingIntent.getActivity(this, 0, open, flags);
-
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Nestly is on")
                 .setContentText(text)
@@ -195,20 +176,19 @@ public class NestlyForegroundService extends Service {
     }
 
     private void checkForUpdateNotice() {
-        PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-        long currentCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-                ? info.getLongVersionCode()
-                : info.versionCode;
-
         HttpURLConnection conn = null;
         try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            long currentCode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? info.getLongVersionCode()
+                    : info.versionCode;
+
             conn = (HttpURLConnection) new URL(UPDATE_MANIFEST_URL + "?t=" + System.currentTimeMillis()).openConnection();
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(15000);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("Accept", "application/json");
             conn.connect();
-
             if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) return;
 
             StringBuilder json = new StringBuilder();
