@@ -10,10 +10,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
+    # The publish commit contains only the already-built APK/manifest and uses
+    # [skip ci], so it must not start another Android build.
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, 'Publish Nestly APK')
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -115,6 +118,59 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+      - name: Publish signed APK to portal
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=$(find android/app/build/outputs -type f -name '*.apk' -print -quit)
+          mkdir -p public/downloads
+          cp "$apk" public/downloads/nestly.apk
+
+          node <<'NODE'
+          const { createHash } = require('node:crypto')
+          const { readFileSync, writeFileSync } = require('node:fs')
+          const { execFileSync } = require('node:child_process')
+
+          const gradle = readFileSync('android/app/build.gradle', 'utf8')
+          const versionCode = Number(/versionCode\s+(\d+)/.exec(gradle)?.[1])
+          const versionName = /versionName\s+"([^"]+)"/.exec(gradle)?.[1]
+          if (!Number.isInteger(versionCode) || !versionName) throw new Error('Could not read Android version')
+
+          const apk = readFileSync('public/downloads/nestly.apk')
+          const sha256 = createHash('sha256').update(apk).digest('hex')
+          const size = apk.length
+          const actualCode = execFileSync('aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
+            .match(/versionCode='([^']+)'/)?.[1]
+          const actualName = execFileSync('aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
+            .match(/versionName='([^']+)'/)?.[1]
+          if (String(versionCode) !== actualCode || versionName !== actualName) {
+            throw new Error(`APK version ${actualCode}/${actualName} does not match Gradle ${versionCode}/${versionName}`)
+          }
+
+          const manifest = {
+            versionCode,
+            versionName,
+            url: 'https://nestly-gamma-seven.vercel.app/downloads/nestly.apk',
+            sha256,
+            size,
+            notes: 'Improved child cloud sync and automatic update notices.',
+            publishedAt: new Date().toISOString(),
+          }
+          writeFileSync('public/downloads/latest.json', JSON.stringify(manifest, null, 2) + '\n')
+          console.log(JSON.stringify(manifest, null, 2))
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/downloads/nestly.apk public/downloads/latest.json
+          if git diff --cached --quiet; then
+            echo "Published APK is already identical; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Publish Nestly APK ${{ github.ref_name }} [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
 
       - name: Remove signing material
         if: always()
