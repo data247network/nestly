@@ -1,10 +1,12 @@
 package family.nestly.app;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.provider.Settings;
 
@@ -43,6 +45,16 @@ public final class NestlyDeviceOwner {
             manager.setLockTaskPackages(admin(context), new String[]{context.getPackageName()});
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 manager.setLockTaskFeatures(admin(context), DevicePolicyManager.LOCK_TASK_FEATURE_NONE);
+            }
+            // School Lock must never remove the child's ability to call the
+            // parent-configured safety contacts. Device Owner can grant this
+            // runtime permission without exposing the Phone app or dialler.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                manager.setPermissionGrantState(
+                        admin(context),
+                        context.getPackageName(),
+                        Manifest.permission.CALL_PHONE,
+                        DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
             }
             return true;
         } catch (SecurityException ignored) {
