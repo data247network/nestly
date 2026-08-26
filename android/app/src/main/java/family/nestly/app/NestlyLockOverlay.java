@@ -2,12 +2,13 @@ package family.nestly.app;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.provider.Settings;
+import android.telecom.TelecomManager;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -22,55 +23,26 @@ import java.util.List;
 /**
  * The lock, actually enforced.
  *
- * The lock used to be a screen inside the app, which meant it stopped anything
- * only for as long as the child chose to look at it: Home, and the phone was
- * theirs again. This draws over every other app instead, so a routine that says
- * "no phone at bedtime" means it.
- *
- * WHAT THIS IS NOT. It is an overlay, not a device lock. A determined teenager
- * can revoke the "display over other apps" permission in Settings, or uninstall
- * the app. Short of Device Owner provisioning — which requires a factory reset
- * and is not something a family will do — that is the ceiling on Android, and
- * the product should say so rather than imply a cage. Revoking it is visible to
- * the parent, which is the honest defence: this is a speed bump with a witness,
- * not a prison.
- *
- * EMERGENCY CALLS ARE ALWAYS AVAILABLE. A lock that could stop a child phoning
- * a parent or the emergency services would be a safety hazard dressed as a
- * safety feature, so the contacts the parent configured are on the overlay
- * itself and dial straight out.
+ * Parent-configured safety contacts remain callable while any child lock is
+ * active. Calls are placed through Android Telecom directly rather than opening
+ * the dialler, so School Lock does not have to permit the Phone application.
  */
 public class NestlyLockOverlay {
 
     private static WindowManager windowManager;
     private static View overlay;
 
-    /** Whether the user has granted "display over other apps". */
     public static boolean canDraw(Context ctx) {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx);
-    }
-
-    public static Intent permissionIntent(Context ctx) {
-        Intent i = new Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:" + ctx.getPackageName()));
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        return i;
     }
 
     public static boolean isShowing() {
         return overlay != null;
     }
 
-    /**
-     * Puts the lock on screen.
-     *
-     * @param contacts alternating name/number pairs; may be empty.
-     */
     @SuppressLint("InflateParams")
     public static void show(Context ctx, String title, String subtitle, List<String[]> contacts) {
-        if (!canDraw(ctx)) return;
-        if (overlay != null) return;
+        if (!canDraw(ctx) || overlay != null) return;
 
         windowManager = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
         if (windowManager == null) return;
@@ -81,7 +53,6 @@ public class NestlyLockOverlay {
         root.setBackgroundColor(Color.parseColor("#F2141F26"));
         int pad = dp(ctx, 28);
         root.setPadding(pad, pad, pad, pad);
-        // Swallows taps so they cannot reach whatever is behind the overlay.
         root.setClickable(true);
         root.setFocusable(true);
 
@@ -97,8 +68,7 @@ public class NestlyLockOverlay {
         sub.setTextColor(Color.parseColor("#B9C3CC"));
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         sub.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(-2, -2);
         subLp.topMargin = dp(ctx, 10);
         root.addView(sub, subLp);
 
@@ -108,8 +78,7 @@ public class NestlyLockOverlay {
             label.setTextColor(Color.parseColor("#8A97A2"));
             label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
             label.setGravity(Gravity.CENTER);
-            LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(-2, -2);
             labelLp.topMargin = dp(ctx, 26);
             root.addView(label, labelLp);
 
@@ -120,17 +89,9 @@ public class NestlyLockOverlay {
                 call.setAllCaps(false);
                 call.setTextColor(Color.WHITE);
                 call.setBackgroundColor(Color.parseColor("#147D77"));
-                final String number = c[1];
-                call.setOnClickListener(v -> {
-                    // ACTION_DIAL, not ACTION_CALL: it opens the dialer with the
-                    // number filled in and needs no calling permission, so this
-                    // cannot fail shut at the moment a child needs it most.
-                    Intent dial = new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + number));
-                    dial.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    ctx.startActivity(dial);
-                });
-                LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
-                        dp(ctx, 240), LinearLayout.LayoutParams.WRAP_CONTENT);
+                final String number = c[1].trim();
+                call.setOnClickListener(v -> placeParentCall(ctx, number));
+                LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(dp(ctx, 240), -2);
                 btnLp.topMargin = dp(ctx, 10);
                 root.addView(call, btnLp);
             }
@@ -139,14 +100,8 @@ public class NestlyLockOverlay {
         int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
-
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                type,
-                // Not FLAG_NOT_TOUCHABLE: the whole point is to absorb touches.
-                // FLAG_SHOW_WHEN_LOCKED keeps the emergency numbers reachable
-                // without unlocking the phone first.
+                -1, -1, type,
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSLUCENT);
@@ -155,11 +110,26 @@ public class NestlyLockOverlay {
         try {
             windowManager.addView(root, lp);
             overlay = root;
-        } catch (Exception e) {
-            // Permission revoked between the check and the add, or an OEM that
-            // refuses the window type. Failing silently is right: the app must
-            // not crash on a child's phone over a lock screen.
+        } catch (Exception ignored) {
             overlay = null;
+        }
+    }
+
+    private static void placeParentCall(Context ctx, String number) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        if (ctx.checkSelfPermission(android.Manifest.permission.CALL_PHONE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+
+        TelecomManager telecom = (TelecomManager) ctx.getSystemService(Context.TELECOM_SERVICE);
+        if (telecom == null) return;
+
+        try {
+            Uri address = Uri.fromParts("tel", number, null);
+            Bundle extras = new Bundle();
+            telecom.placeCall(address, extras);
+        } catch (SecurityException ignored) {
+            // Device Owner configuration grants CALL_PHONE to Nestly. If policy
+            // or the SIM prevents the call, remain on the lock rather than crash.
         }
     }
 
@@ -167,13 +137,10 @@ public class NestlyLockOverlay {
         if (overlay == null || windowManager == null) return;
         try {
             windowManager.removeView(overlay);
-        } catch (Exception ignored) {
-            /* already gone */
-        }
+        } catch (Exception ignored) { }
         overlay = null;
     }
 
-    /** Convenience for building the contact list from the JS side. */
     public static List<String[]> pairs(List<String> flat) {
         List<String[]> out = new ArrayList<>();
         if (flat == null) return out;
