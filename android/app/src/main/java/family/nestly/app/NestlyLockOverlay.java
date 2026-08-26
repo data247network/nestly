@@ -36,6 +36,15 @@ public class NestlyLockOverlay {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx);
     }
 
+    /** Open the system page used to grant Nestly overlay permission. */
+    public static android.content.Intent permissionIntent(Context ctx) {
+        android.content.Intent intent = new android.content.Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + ctx.getPackageName()));
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+        return intent;
+    }
+
     public static boolean isShowing() {
         return overlay != null;
     }
