@@ -1,25 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import {
+  existingHouseholdId,
   loadEventsForChildren,
   loadHousehold,
   loadUsageForChildren,
-  resolveHouseholdId,
 } from '../cloud/sync'
 import { subscribeToChildrenSafe } from '../cloud/realtime'
 import { useDevice } from '../platform/device'
 import { useStore } from './store'
 
-/**
- * Fills the parent app's alerts, activity and reports from the cloud.
- *
- * Supabase is the primary remote source of truth. Bluetooth is only a local
- * fallback when the phones are together without internet. A realtime channel
- * triggers immediate hydration, while the periodic pull remains as a recovery
- * path when a socket is unavailable.
- */
 const REFRESH_MS = 15_000
 
+/** Hydrates the parent store from the authenticated household, not Bluetooth state. */
 export function CloudHydrate() {
   const { role, children: liveChildren, pairings } = useDevice()
   const { dispatch } = useStore()
@@ -49,14 +42,15 @@ export function CloudHydrate() {
 
       const cloudIds = house.children.map((c) => c.id)
       setCloudChildIds((current) => current.join(',') === cloudIds.join(',') ? current : cloudIds)
-      if (cloudIds.length === 0) return
 
+      // Cloud children are always hydrated, including children with no local
+      // Bluetooth pairing. This makes the account/dashboard usable at distance.
       dispatch({
         type: 'syncCloudChildren',
-        children: house.children
-          .filter((c) => boundLocalId(c.id) == null)
-          .map((c) => ({ id: c.id, name: c.name, avatar: c.avatar })),
+        children: house.children.map((c) => ({ id: c.id, name: c.name, avatar: c.avatar })),
       })
+
+      if (cloudIds.length === 0) return
 
       const [events, usage] = await Promise.all([
         loadEventsForChildren(cloudIds).catch(() => []),
@@ -107,7 +101,7 @@ export function CloudHydrate() {
     if (!hasCloud() || role !== 'parent') return
     let cancelled = false
     void (async () => {
-      const id = await resolveHouseholdId().catch(() => null)
+      const id = await existingHouseholdId().catch(() => null)
       if (cancelled || !id) return
       householdId.current = id
       await pull()
@@ -117,12 +111,8 @@ export function CloudHydrate() {
     }
   }, [role, pull])
 
-  // Realtime is the fast path: child -> cloud -> parent app without waiting
-  // for the polling interval. The callback only schedules a pull; it never
-  // mutates the store directly, so all cloud data continues through one path.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent' || cloudChildIds.length === 0) return
-
     let timer: ReturnType<typeof setTimeout> | undefined
     const schedulePull = () => {
       clearTimeout(timer)
@@ -135,10 +125,8 @@ export function CloudHydrate() {
     }
   }, [role, cloudChildIds, pull])
 
-  // Poll as a recovery path and when the app returns to the foreground.
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
-
     let timer: ReturnType<typeof setInterval> | undefined
     const start = () => {
       if (!timer) timer = setInterval(() => void pull(), REFRESH_MS)
@@ -153,7 +141,6 @@ export function CloudHydrate() {
         start()
       } else stop()
     }
-
     onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
