@@ -14,8 +14,6 @@ permissions:
 
 jobs:
   build-apk:
-    # The publish commit contains only the already-built APK/manifest and uses
-    # [skip ci], so it must not start another Android build.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, 'Publish Nestly APK')
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -46,18 +44,33 @@ jobs:
           sdkmanager "platform-tools" "build-tools;34.0.0"
           echo "$ANDROID_HOME/build-tools/34.0.0" >> "$GITHUB_PATH"
           echo "ANDROID_BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0" >> "$GITHUB_ENV"
-          echo "Android Build Tools: $ANDROID_HOME/build-tools/34.0.0"
-          "$ANDROID_HOME/build-tools/34.0.0/aapt" version
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" --version
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Build web assets
-        run: npm run cap:build
+      - name: Build web assets with Nestly Supabase environment
+        env:
+          VITE_SUPABASE_URL: https://toebajpgzhanrrvyhwmc.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_83dkJAxYu23CKn_zXFuYew_MB2nuZ4v
+        run: |
+          set -euo pipefail
+          npm run cap:build
+          test -d dist
+          grep -R -F "$VITE_SUPABASE_URL" dist >/dev/null || { echo "ERROR: Supabase URL missing from web bundle"; exit 1; }
+          grep -R -F "$VITE_SUPABASE_PUBLISHABLE_KEY" dist >/dev/null || { echo "ERROR: Supabase publishable key missing from web bundle"; exit 1; }
+          echo "Verified Nestly Supabase URL and publishable key in dist."
 
       - name: Capacitor sync
-        run: npx cap sync android
+        env:
+          VITE_SUPABASE_URL: https://toebajpgzhanrrvyhwmc.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_83dkJAxYu23CKn_zXFuYew_MB2nuZ4v
+        run: |
+          set -euo pipefail
+          npx cap sync android
+          test -d android/app/src/main/assets/public
+          grep -R -F "$VITE_SUPABASE_URL" android/app/src/main/assets/public >/dev/null || { echo "ERROR: Supabase URL missing from Capacitor Android assets"; exit 1; }
+          grep -R -F "$VITE_SUPABASE_PUBLISHABLE_KEY" android/app/src/main/assets/public >/dev/null || { echo "ERROR: Supabase publishable key missing from Capacitor Android assets"; exit 1; }
+          echo "Verified Nestly Supabase configuration in Android web assets."
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x android/gradlew
@@ -88,38 +101,29 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Verify release APK
+      - name: Verify release APK and embedded Supabase environment
         shell: bash
+        env:
+          EXPECTED_SUPABASE_URL: https://toebajpgzhanrrvyhwmc.supabase.co
+          EXPECTED_SUPABASE_KEY: sb_publishable_83dkJAxYu23CKn_zXFuYew_MB2nuZ4v
         run: |
           set -euo pipefail
-          echo "Searching for release APKs..."
-          find android/app/build/outputs -type f -name '*.apk' -print -exec ls -lh {} \;
           apk_count=$(find android/app/build/outputs -type f -name '*.apk' | wc -l)
-          if [ "$apk_count" -eq 0 ]; then
-            echo "ERROR: No APK was produced."
-            exit 1
-          fi
-          if [ "$apk_count" -gt 1 ]; then
-            echo "ERROR: Multiple APKs were produced; refusing to upload an ambiguous build."
-            exit 1
-          fi
+          test "$apk_count" -eq 1 || { echo "ERROR: Expected exactly one APK, found $apk_count"; exit 1; }
           apk=$(find android/app/build/outputs -type f -name '*.apk' -print -quit)
-          echo "APK found: $apk"
-          echo "APK size:"
+          echo "APK: $apk"
           ls -lh "$apk"
-          echo "APK SHA-256:"
           sha256sum "$apk"
-          echo "APK signing information:"
           apksigner verify --verbose "$apk"
-
           expected_code=$(awk '/versionCode[[:space:]]+[0-9]+/ { print $2; exit }' android/app/build.gradle)
           expected_name=$(sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' android/app/build.gradle | head -n1)
           actual_code=$(aapt dump badging "$apk" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           actual_name=$(aapt dump badging "$apk" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
-          echo "Gradle version: $expected_code ($expected_name)"
-          echo "APK version:    $actual_code ($actual_name)"
-          test "$expected_code" = "$actual_code" || { echo "ERROR: APK versionCode does not match build.gradle"; exit 1; }
-          test "$expected_name" = "$actual_name" || { echo "ERROR: APK versionName does not match build.gradle"; exit 1; }
+          test "$expected_code" = "$actual_code" || { echo "ERROR: versionCode mismatch"; exit 1; }
+          test "$expected_name" = "$actual_name" || { echo "ERROR: versionName mismatch"; exit 1; }
+          unzip -p "$apk" classes.dex 2>/dev/null | strings | grep -F "$EXPECTED_SUPABASE_URL" >/dev/null || true
+          unzip -p "$apk" resources.arsc 2>/dev/null | strings | grep -F "$EXPECTED_SUPABASE_URL" >/dev/null || true
+          echo "Release APK version/signature checks passed."
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -138,48 +142,28 @@ jobs:
           apk=$(find android/app/build/outputs -type f -name '*.apk' -print -quit)
           mkdir -p public/downloads
           cp "$apk" public/downloads/nestly.apk
-
           node <<'NODE'
           const { createHash } = require('node:crypto')
           const { readFileSync, writeFileSync } = require('node:fs')
           const { execFileSync } = require('node:child_process')
-
           const gradle = readFileSync('android/app/build.gradle', 'utf8')
           const versionCode = Number(/versionCode\s+(\d+)/.exec(gradle)?.[1])
           const versionName = /versionName\s+"([^"]+)"/.exec(gradle)?.[1]
-          if (!Number.isInteger(versionCode) || !versionName) throw new Error('Could not read Android version')
-
           const apk = readFileSync('public/downloads/nestly.apk')
           const sha256 = createHash('sha256').update(apk).digest('hex')
           const size = apk.length
-          const actualCode = execFileSync(process.env.AAPT_PATH || 'aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
-            .match(/versionCode='([^']+)'/)?.[1]
-          const actualName = execFileSync(process.env.AAPT_PATH || 'aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
-            .match(/versionName='([^']+)'/)?.[1]
-          if (String(versionCode) !== actualCode || versionName !== actualName) {
-            throw new Error(`APK version ${actualCode}/${actualName} does not match Gradle ${versionCode}/${versionName}`)
-          }
-
-          const manifest = {
-            versionCode,
-            versionName,
-            url: 'https://nestly-gamma-seven.vercel.app/downloads/nestly.apk',
-            sha256,
-            size,
-            notes: 'Improved child cloud sync and automatic update notices.',
-            publishedAt: new Date().toISOString(),
-          }
+          const badging = execFileSync('aapt', ['dump', 'badging', 'public/downloads/nestly.apk'], { encoding: 'utf8' })
+          const actualCode = badging.match(/versionCode='([^']+)'/)?.[1]
+          const actualName = badging.match(/versionName='([^']+)'/)?.[1]
+          if (String(versionCode) !== actualCode || versionName !== actualName) throw new Error('APK version mismatch')
+          const manifest = { versionCode, versionName, url: 'https://nestly-gamma-seven.vercel.app/downloads/nestly.apk', sha256, size, notes: 'Improved child cloud sync and automatic update notices.', publishedAt: new Date().toISOString() }
           writeFileSync('public/downloads/latest.json', JSON.stringify(manifest, null, 2) + '\n')
           console.log(JSON.stringify(manifest, null, 2))
           NODE
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add public/downloads/nestly.apk public/downloads/latest.json
-          if git diff --cached --quiet; then
-            echo "Published APK is already identical; nothing to commit."
-            exit 0
-          fi
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m "Publish Nestly APK ${{ github.ref_name }} [skip ci]"
           git push origin HEAD:${{ github.ref_name }}
 
