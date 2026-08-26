@@ -6,22 +6,16 @@ import { PairChild } from './setup'
 /** Cloud-enrolled children are the primary device list; Bluetooth is optional. */
 export function CloudFirstDevices() {
   const { household, updatedAt } = useCloudChildren()
-  const { go } = useStore()
+  const { go, dispatch } = useStore()
   const [showBluetooth, setShowBluetooth] = useState(false)
 
   if (showBluetooth) {
     return (
       <div className="flex h-full flex-col overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setShowBluetooth(false)}
-          className="px-[22px] pt-5 text-left text-xs font-bold text-brand"
-        >
+        <button type="button" onClick={() => setShowBluetooth(false)} className="px-[22px] pt-5 text-left text-xs font-bold text-brand">
           ← Back to cloud devices
         </button>
-        <div className="min-h-0 flex-1">
-          <PairChild />
-        </div>
+        <div className="min-h-0 flex-1"><PairChild /></div>
       </div>
     )
   }
@@ -42,7 +36,10 @@ export function CloudFirstDevices() {
             <button
               key={child.id}
               type="button"
-              onClick={() => go('childSetup')}
+              onClick={() => {
+                dispatch({ type: 'activeChild', id: child.id })
+                go('screentime')
+              }}
               className="rounded-2xl bg-cream px-3.5 py-3 text-left"
             >
               <div className="flex items-center gap-3">
@@ -70,20 +67,12 @@ export function CloudFirstDevices() {
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => go('household')}
-        className="rounded-2xl bg-brand px-4 py-3.5 text-left text-white"
-      >
+      <button type="button" onClick={() => go('household')} className="rounded-2xl bg-brand px-4 py-3.5 text-left text-white">
         <span className="block text-[13.5px] font-bold">Add child with setup code</span>
         <span className="mt-0.5 block text-[11.5px] opacity-90">Works remotely — the phones do not need to be together.</span>
       </button>
 
-      <button
-        type="button"
-        onClick={() => setShowBluetooth(true)}
-        className="rounded-2xl border border-line px-4 py-3 text-left"
-      >
+      <button type="button" onClick={() => setShowBluetooth(true)} className="rounded-2xl border border-line px-4 py-3 text-left">
         <span className="block text-[13px] font-bold">Pair nearby over Bluetooth</span>
         <span className="mt-0.5 block text-[11.5px] text-body">Optional local connection for offline use and faster nearby sync.</span>
       </button>
