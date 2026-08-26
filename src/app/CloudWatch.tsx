@@ -1,38 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import {
+  existingHouseholdId,
   loadHousehold,
-  resolveHouseholdId,
   type HouseholdSummary,
 } from '../cloud/sync'
 import { subscribeToChildrenSafe } from '../cloud/realtime'
 import { useDevice } from '../platform/device'
 
-/**
- * The parent's live view of children who are nowhere near them.
- *
- * `CloudBridge` pushes what arrives over Bluetooth *up*. This is the other
- * direction, and it is the half that makes the product work at a distance: the
- * child's phone now uploads on its own, so a parent at work can see a child at
- * school without the two phones ever being in range.
- *
- * Reads only. Bluetooth remains the authority when both phones are together —
- * it is fresher and works with no signal — so nothing here writes to the local
- * store or touches policy. A cloud outage costs a parent remote visibility and
- * nothing else.
- */
-/**
- * How often the parent's view re-reads the server while it is on screen.
- *
- * The child uploads telemetry every 60s, so polling faster than this buys
- * nothing but requests; polling slower makes a parent watching a child walk
- * home wait for news that has already arrived.
- */
 const REFRESH_INTERVAL_MS = 15_000
 
+/** Parent's cloud-first view of children, independent of Bluetooth pairing. */
 export function useCloudChildren(): {
   household: HouseholdSummary | null
-  /** Wall-clock time of the last successful read, for a staleness indicator. */
   updatedAt: number | null
 } {
   const { role } = useDevice()
@@ -49,90 +29,64 @@ export function useCloudChildren(): {
         setUpdatedAt(Date.now())
       }
     } catch {
-      // Offline is the normal state for this product, not an error to surface.
-      // The screen keeps showing the last good read with its timestamp.
+      // Keep the last successful cloud snapshot while offline.
     }
   }, [])
 
   useEffect(() => {
     if (!hasCloud() || role !== 'parent') return
     let cancelled = false
-
     void (async () => {
-      const id = await resolveHouseholdId().catch(() => null)
+      // Always resolve the authenticated user's membership first. A cached
+      // household can survive sign-out/re-sign-in and point at an old family.
+      const id = await existingHouseholdId().catch(() => null)
       if (cancelled || !id) return
       householdId.current = id
       await refresh()
     })()
-
     return () => {
       cancelled = true
     }
   }, [role, refresh])
 
-  const childKey = (household?.children ?? [])
-    .map((c) => c.id)
-    .sort()
-    .join(',')
+  const childKey = (household?.children ?? []).map((c) => c.id).sort().join(',')
 
   useEffect(() => {
     if (!hasCloud() || role !== 'parent' || !childKey) return
-
-    // Debounced: a child coming back into signal flushes its whole backlog, and
-    // one reload per row would hammer the API for no extra information.
     let pending: ReturnType<typeof setTimeout> | undefined
     const stop = subscribeToChildrenSafe(childKey.split(','), () => {
       clearTimeout(pending)
-      pending = setTimeout(() => void refresh(), 800)
+      pending = setTimeout(() => void refresh(), 500)
     })
-
     return () => {
       clearTimeout(pending)
       stop()
     }
   }, [role, childKey, refresh])
 
-  // A timed refresh underneath the socket.
-  //
-  // Realtime is the fast path but it is not a guarantee: a websocket that drops
-  // on a phone changing network reconnects silently and the screen simply stops
-  // updating, with nothing on it to say so. Polling means the worst case is
-  // stale by one interval rather than stale until the app is reopened.
-  //
-  // Paused when the app is not on screen. A parent's phone in a pocket polling
-  // all afternoon spends battery to refresh a view nobody is looking at, and
-  // the visibility change itself triggers an immediate catch-up.
   useEffect(() => {
-    if (!hasCloud() || role !== 'parent' || !childKey) return
-
+    if (!hasCloud() || role !== 'parent') return
     let timer: ReturnType<typeof setInterval> | undefined
-
     const start = () => {
-      if (timer) return
-      timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS)
+      if (!timer) timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS)
     }
-    const stopTimer = () => {
+    const stop = () => {
       clearInterval(timer)
       timer = undefined
     }
-
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         void refresh()
         start()
-      } else {
-        stopTimer()
-      }
+      } else stop()
     }
-
     onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
-
     return () => {
-      stopTimer()
+      stop()
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [role, childKey, refresh])
+  }, [role, refresh])
 
   return { household, updatedAt }
 }
