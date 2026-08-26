@@ -1,16 +1,5 @@
 apply plugin: 'com.android.application'
 
-// Release signing.
-//
-// Debug-signed APKs are the single biggest cause of "app not installed" when
-// sideloading: Play Protect blocks them, and because every machine has its own
-// debug keystore, an update signed by a different one fails outright with
-// INSTALL_FAILED_UPDATE_INCOMPATIBLE.
-//
-// Credentials live in android/keystore.properties, which is gitignored. See
-// docs/DISTRIBUTION.md for how to create the keystore. When the file is absent
-// the release build simply stays unsigned rather than failing, so a plain
-// `assembleDebug` still works on a fresh clone.
 def keystorePropertiesFile = rootProject.file("keystore.properties")
 def keystoreProperties = new Properties()
 def hasSigningConfig = false
@@ -40,8 +29,8 @@ android {
         applicationId "family.nestly.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 18
-        versionName "1.17"
+        versionCode 19
+        versionName "1.18"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
@@ -51,17 +40,13 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            if (hasSigningConfig) {
-                signingConfig signingConfigs.release
-            }
+            if (hasSigningConfig) signingConfig signingConfigs.release
         }
     }
 }
 
 repositories {
-    flatDir{
-        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
-    }
+    flatDir { dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs' }
 }
 
 dependencies {
@@ -80,9 +65,7 @@ apply from: 'capacitor.build.gradle'
 
 try {
     def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
-    }
+    if (servicesJSON.text) apply plugin: 'com.google.gms.google-services'
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }
