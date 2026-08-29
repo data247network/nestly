@@ -36,80 +36,44 @@ export default function App() {
     SplashScreen.hide().catch(() => {})
   }, [native])
 
-  // A persisted UI flag is not authentication. On cloud-enabled parent builds,
-  // always reconcile local state with Supabase before routing into the dashboard.
   useEffect(() => {
-    if (!ready || role !== 'parent') {
-      setAuthReady(role !== 'parent')
-      return
-    }
-    if (!hasCloud()) {
-      setAuthReady(true)
-      return
-    }
-
+    if (!ready || role !== 'parent') { setAuthReady(role !== 'parent'); return }
+    if (!hasCloud()) { setAuthReady(true); return }
     let cancelled = false
     const client = supabase()
     setAuthReady(false)
-
     const reconcile = async () => {
       try {
         const { data, error } = await client.auth.getSession()
-        if (error || !data.session) {
-          await signOut()
-          return
-        }
-        // getUser validates the current access token with Supabase rather than
-        // trusting only the session object persisted on the device.
+        if (error || !data.session) { await signOut(); return }
         const { data: user, error: userError } = await client.auth.getUser()
         if (userError || !user.user) await signOut()
         else if (!signedIn) await signIn()
-      } catch {
-        await signOut()
-      } finally {
-        if (!cancelled) setAuthReady(true)
-      }
+      } catch { await signOut() }
+      finally { if (!cancelled) setAuthReady(true) }
     }
-
     void reconcile()
     const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
-      void (async () => {
-        if (session) {
-          if (!signedIn) await signIn()
-        } else {
-          await signOut()
-        }
-      })()
+      void (async () => { if (session) { if (!signedIn) await signIn() } else await signOut() })()
     })
-
-    return () => {
-      cancelled = true
-      listener.subscription.unsubscribe()
-    }
+    return () => { cancelled = true; listener.subscription.unsubscribe() }
   }, [ready, role, signedIn, signIn, signOut])
 
   if (!ready || (role === 'parent' && hasCloud() && !authReady)) return <Splash />
   const portal = native || forcedApp() ? null : currentPortalRoute()
   if (portal) return <Portal route={portal} />
-
-  if (wide && !native && showcaseRequested()) {
-    return <><PolicyBridge /><CloudBridge /><Showcase /></>
-  }
-
+  if (wide && !native && showcaseRequested()) return <><PolicyBridge /><CloudBridge /><Showcase /></>
   if (!onboarded) return <div className="safe-top flex h-full flex-col bg-white"><Onboarding index={card} onNext={() => setCard((c) => Math.min(2, c + 1) as 0 | 1 | 2)} /></div>
   if (!role) return <div className="safe-top flex h-full flex-col bg-white"><RoleGate /></div>
-
-  if (role === 'child') {
-    return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id="childHome" /></div>
-  }
-
+  if (role === 'child') return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id="childHome" /></div>
   if (!signedIn) return <div className="safe-top flex h-full flex-col bg-white"><Login onSignedIn={signIn} /></div>
 
   const isWebScreen = WEB_SCREENS.includes(state.screen)
   const screen = isWebScreen ? 'home' : state.screen
   return (
-    <div className="safe-top flex h-full flex-col bg-white">
+    <div className="safe-top relative flex h-full flex-col bg-white">
       <PolicyBridge /><CloudBridge /><CloudHydrate /><NotesBridge /><PushBridge /><CloudCommandBridge />
+      <button type="button" onClick={() => void signOut()} className="absolute right-3 top-3 z-50 rounded-full border border-line bg-white px-3 py-1.5 text-[11px] font-bold text-body shadow-sm">Sign out</button>
       <div className="min-h-0 flex-1 overflow-y-auto"><UpdateBanner /><Screen id={screen} /></div>
       {showsTabBar(screen) ? <TabBar /> : null}
     </div>
