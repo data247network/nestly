@@ -2,10 +2,8 @@ import { useState } from 'react'
 import { hasCloud } from '../cloud/client'
 import {
   ensureHousehold,
-  existingHouseholdId,
   redeemAdultInvite,
   requestPasswordReset,
-  resendConfirmation,
   signIn as cloudSignIn,
   signUp as cloudSignUp,
 } from '../cloud/sync'
@@ -41,13 +39,11 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
       setError('Enter your email and password.')
       return
     }
-
     if (!cloud) {
       if (checkCredentials(email, password)) onSignedIn()
       else setError('That email and password do not match.')
       return
     }
-
     setBusy(true)
     try {
       if (mode === 'signup') {
@@ -61,10 +57,6 @@ export function Login({ onSignedIn }: { onSignedIn: () => void }) {
       } else {
         await cloudSignIn(email.trim(), password)
       }
-
-      // Authentication must never be blocked by household discovery. Enter the
-      // app as soon as Supabase has authenticated the parent; the cloud bridges
-      // resolve the household afterwards and retry transient failures.
       onSignedIn()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not sign in. Please try again.')
