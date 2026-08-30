@@ -28,6 +28,7 @@ export default function App() {
   const { state } = useStore()
   const [card, setCard] = useState<0 | 1 | 2>(0)
   const [authReady, setAuthReady] = useState(false)
+  const [cloudSession, setCloudSession] = useState<boolean | null>(null)
 
   useEffect(() => {
     if (!native) return
@@ -37,26 +38,46 @@ export default function App() {
   }, [native])
 
   useEffect(() => {
-    if (!ready || role !== 'parent') { setAuthReady(role !== 'parent'); return }
-    if (!hasCloud()) { setAuthReady(true); return }
+    if (!ready || role !== 'parent') {
+      setCloudSession(null)
+      setAuthReady(role !== 'parent')
+      return
+    }
+    if (!hasCloud()) {
+      setCloudSession(null)
+      setAuthReady(true)
+      return
+    }
+
     let cancelled = false
     const client = supabase()
     setAuthReady(false)
-    const reconcile = async () => {
-      try {
-        const { data, error } = await client.auth.getSession()
-        if (error || !data.session) { await signOut(); return }
-        const { data: user, error: userError } = await client.auth.getUser()
-        if (userError || !user.user) await signOut()
-        else if (!signedIn) await signIn()
-      } catch { await signOut() }
-      finally { if (!cancelled) setAuthReady(true) }
+    setCloudSession(null)
+
+    const applySession = async (session: unknown) => {
+      if (cancelled) return
+      const valid = Boolean(session)
+      setCloudSession(valid)
+      if (valid && !signedIn) await signIn()
+      if (!valid && signedIn) await signOut()
+      if (!cancelled) setAuthReady(true)
     }
-    void reconcile()
+
+    void client.auth.getSession()
+      .then(({ data, error }) => {
+        if (error) return applySession(null)
+        return applySession(data.session)
+      })
+      .catch(() => applySession(null))
+
     const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
-      void (async () => { if (session) { if (!signedIn) await signIn() } else await signOut() })()
+      void applySession(session)
     })
-    return () => { cancelled = true; listener.subscription.unsubscribe() }
+
+    return () => {
+      cancelled = true
+      listener.subscription.unsubscribe()
+    }
   }, [ready, role, signedIn, signIn, signOut])
 
   if (!ready || (role === 'parent' && hasCloud() && !authReady)) return <Splash />
@@ -66,7 +87,11 @@ export default function App() {
   if (!onboarded) return <div className="safe-top flex h-full flex-col bg-white"><Onboarding index={card} onNext={() => setCard((c) => Math.min(2, c + 1) as 0 | 1 | 2)} /></div>
   if (!role) return <div className="safe-top flex h-full flex-col bg-white"><RoleGate /></div>
   if (role === 'child') return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id="childHome" /></div>
-  if (!signedIn) return <div className="safe-top flex h-full flex-col bg-white"><Login onSignedIn={signIn} /></div>
+
+  // For cloud-backed parent accounts, Supabase is the authentication source of truth.
+  // Local signedIn is retained only for non-cloud/test builds and legacy UI state.
+  const parentSignedIn = hasCloud() ? cloudSession === true : signedIn
+  if (!parentSignedIn) return <div className="safe-top flex h-full flex-col bg-white"><Login onSignedIn={signIn} /></div>
 
   const isWebScreen = WEB_SCREENS.includes(state.screen)
   const screen = isWebScreen ? 'home' : state.screen
