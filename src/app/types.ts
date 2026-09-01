@@ -2,7 +2,7 @@ export type ScreenId =
   | 'onboard1' | 'onboard2' | 'onboard3' | 'login' | 'addChild' | 'enrollDevice'
   | 'home' | 'v2control' | 'map' | 'geofence' | 'screentime' | 'scenario' | 'activity' | 'trail' | 'contacts' | 'alerts' | 'acoustic' | 'hub' | 'tips' | 'report'
   | 'roleGate' | 'pair' | 'childSetup' | 'plans' | 'household'
-  | 'childHome' | 'childLock' | 'childNotice' | 'webOverview' | 'webSplit' | 'paywall'
+  | 'childHome' | 'childRoutines' | 'childRequests' | 'childRewards' | 'childLock' | 'childNotice' | 'webOverview' | 'webSplit' | 'paywall'
 
 export type Surface = 'parent' | 'child' | 'web'
 export type Tone = 'teal' | 'amber' | 'coral' | 'violet'
