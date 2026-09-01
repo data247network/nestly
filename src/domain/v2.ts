@@ -3,6 +3,7 @@ export type DeviceEnrollmentState = 'pending' | 'active' | 'revoked' | 'retired'
 export type RequestKind = 'extra_screen_time' | 'app_access' | 'temporary_unlock' | 'routine_exception' | 'custom'
 export type RequestStatus = 'pending' | 'approved' | 'declined' | 'expired' | 'cancelled'
 export type PolicyExceptionKind = 'emergency_contact' | 'emergency_app' | 'temporary_unlock' | 'approved_app'
+export type PolicyCommandStatus = 'queued' | 'delivered' | 'applied' | 'acknowledged' | 'failed'
 
 export interface DeviceRecord {
   id: string
@@ -76,9 +77,17 @@ export interface RewardPayload {
   message?: string
 }
 
+export interface PolicyCommandProgress {
+  commandId: string
+  deviceId?: string | null
+  status: PolicyCommandStatus
+  updatedAt?: string | null
+  error?: string | null
+}
+
 export interface CommandDelivery {
   commandId: string
   deviceId?: string | null
   channel: 'realtime' | 'push' | 'poll' | 'bluetooth'
-  status: 'queued' | 'delivered' | 'acknowledged' | 'failed'
+  status: PolicyCommandStatus
 }
