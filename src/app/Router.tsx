@@ -2,15 +2,7 @@ import type { ScreenId } from './types'
 import { AddChild, EnrollDevice, Onboarding } from '../screens/onboarding'
 import { Login } from '../screens/login'
 import { useDevice } from '../platform/device'
-import {
-  AcousticAlert,
-  Alerts,
-  MapZones,
-  NewGeofence,
-  SafetyTips,
-  ScenarioEditor,
-  ScreenTime,
-} from '../screens/parent'
+import { AcousticAlert, Alerts, MapZones, NewGeofence, SafetyTips, ScenarioEditor, ScreenTime } from '../screens/parent'
 import { ActivityTrail } from '../screens/activity'
 import { FamilyHub } from '../screens/hub'
 import { EmergencyContacts } from '../screens/contacts'
@@ -23,46 +15,7 @@ import { Plans } from '../screens/plans'
 import { Paywall, WebOverview, WebSplit } from '../screens/web'
 import { CloudFirstHome } from '../screens/CloudFirstHome'
 import { CloudFirstDevices } from '../screens/CloudFirstDevices'
-
-const SCREENS: Record<ScreenId, () => JSX.Element> = {
-  onboard1: () => <Onboarding index={0} />,
-  onboard2: () => <Onboarding index={1} />,
-  onboard3: () => <Onboarding index={2} />,
-  login: LoginScreen,
-  addChild: AddChild,
-  enrollDevice: EnrollDevice,
-  home: CloudFirstHome,
-  map: MapZones,
-  geofence: NewGeofence,
-  screentime: ScreenTime,
-  scenario: ScenarioEditor,
-  activity: Filtering,
-  trail: ActivityTrail,
-  contacts: EmergencyContacts,
-  alerts: Alerts,
-  acoustic: AcousticAlert,
-  hub: FamilyHub,
-  tips: SafetyTips,
-  roleGate: RoleGate,
-  pair: CloudFirstDevices,
-  childSetup: ChildSetup,
-  household: Household,
-  plans: Plans,
-  report: ActivityReport,
-  childHome: ChildHome,
-  childLock: ChildLock,
-  childNotice: ChildNotice,
-  webOverview: WebOverview,
-  webSplit: WebSplit,
-  paywall: Paywall,
-}
-
-function LoginScreen() {
-  const { signIn } = useDevice()
-  return <Login onSignedIn={signIn} />
-}
-
-export function Screen({ id }: { id: ScreenId }) {
-  const C = SCREENS[id]
-  return <C />
-}
+import { ParentV2 } from '../screens/ParentV2'
+const SCREENS: Record<ScreenId, () => JSX.Element> = { onboard1:()=> <Onboarding index={0}/>, onboard2:()=> <Onboarding index={1}/>, onboard3:()=> <Onboarding index={2}/>, login:LoginScreen, addChild:AddChild, enrollDevice:EnrollDevice, home:CloudFirstHome, v2control:ParentV2, map:MapZones, geofence:NewGeofence, screentime:ScreenTime, scenario:ScenarioEditor, activity:Filtering, trail:ActivityTrail, contacts:EmergencyContacts, alerts:Alerts, acoustic:AcousticAlert, hub:FamilyHub, tips:SafetyTips, roleGate:RoleGate, pair:CloudFirstDevices, childSetup:ChildSetup, household:Household, plans:Plans, report:ActivityReport, childHome:ChildHome, childLock:ChildLock, childNotice:ChildNotice, webOverview:WebOverview, webSplit:WebSplit, paywall:Paywall }
+function LoginScreen(){const {signIn}=useDevice();return <Login onSignedIn={signIn}/>}
+export function Screen({id}:{id:ScreenId}){const C=SCREENS[id];return <C/>}
