@@ -8,6 +8,7 @@ import { FamilyHub } from '../screens/hub'
 import { EmergencyContacts } from '../screens/contacts'
 import { Filtering } from '../screens/filtering'
 import { ChildHome, ChildLock, ChildNotice } from '../screens/child'
+import { ChildRoutinesV2, ChildRequestsV2, ChildRewardsV2 } from '../screens/ChildV2'
 import { ChildSetup, RoleGate } from '../screens/setup'
 import { ActivityReport } from '../screens/report'
 import { Household } from '../screens/household'
@@ -16,6 +17,6 @@ import { Paywall, WebOverview, WebSplit } from '../screens/web'
 import { CloudFirstHome } from '../screens/CloudFirstHome'
 import { CloudFirstDevices } from '../screens/CloudFirstDevices'
 import { ParentV2 } from '../screens/ParentV2'
-const SCREENS: Record<ScreenId, () => JSX.Element> = { onboard1:()=> <Onboarding index={0}/>, onboard2:()=> <Onboarding index={1}/>, onboard3:()=> <Onboarding index={2}/>, login:LoginScreen, addChild:AddChild, enrollDevice:EnrollDevice, home:CloudFirstHome, v2control:ParentV2, map:MapZones, geofence:NewGeofence, screentime:ScreenTime, scenario:ScenarioEditor, activity:Filtering, trail:ActivityTrail, contacts:EmergencyContacts, alerts:Alerts, acoustic:AcousticAlert, hub:FamilyHub, tips:SafetyTips, roleGate:RoleGate, pair:CloudFirstDevices, childSetup:ChildSetup, household:Household, plans:Plans, report:ActivityReport, childHome:ChildHome, childLock:ChildLock, childNotice:ChildNotice, webOverview:WebOverview, webSplit:WebSplit, paywall:Paywall }
+const SCREENS: Record<ScreenId, () => JSX.Element> = { onboard1:()=> <Onboarding index={0}/>, onboard2:()=> <Onboarding index={1}/>, onboard3:()=> <Onboarding index={2}/>, login:LoginScreen, addChild:AddChild, enrollDevice:EnrollDevice, home:CloudFirstHome, v2control:ParentV2, map:MapZones, geofence:NewGeofence, screentime:ScreenTime, scenario:ScenarioEditor, activity:Filtering, trail:ActivityTrail, contacts:EmergencyContacts, alerts:Alerts, acoustic:AcousticAlert, hub:FamilyHub, tips:SafetyTips, roleGate:RoleGate, pair:CloudFirstDevices, childSetup:ChildSetup, household:Household, plans:Plans, report:ActivityReport, childHome:ChildHome, childRoutines:ChildRoutinesV2, childRequests:ChildRequestsV2, childRewards:ChildRewardsV2, childLock:ChildLock, childNotice:ChildNotice, webOverview:WebOverview, webSplit:WebSplit, paywall:Paywall }
 function LoginScreen(){const {signIn}=useDevice();return <Login onSignedIn={signIn}/>}
 export function Screen({id}:{id:ScreenId}){const C=SCREENS[id];return <C/>}
