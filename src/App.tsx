@@ -4,6 +4,7 @@ import { StatusBar, Style } from '@capacitor/status-bar'
 import { SplashScreen } from '@capacitor/splash-screen'
 import { Screen } from './app/Router'
 import { PolicyBridge } from './app/PolicyBridge'
+import { PolicyV2Bridge } from './app/PolicyV2Bridge'
 import { CloudBridge } from './app/CloudBridge'
 import { CloudHydrate } from './app/CloudHydrate'
 import { CloudCommandBridge } from './app/CloudCommandBridge'
@@ -38,22 +39,11 @@ export default function App() {
   }, [native])
 
   useEffect(() => {
-    if (!ready || role !== 'parent') {
-      setCloudSession(null)
-      setAuthReady(role !== 'parent')
-      return
-    }
-    if (!hasCloud()) {
-      setCloudSession(null)
-      setAuthReady(true)
-      return
-    }
-
+    if (!ready || role !== 'parent') { setCloudSession(null); setAuthReady(role !== 'parent'); return }
+    if (!hasCloud()) { setCloudSession(null); setAuthReady(true); return }
     let cancelled = false
     const client = supabase()
-    setAuthReady(false)
-    setCloudSession(null)
-
+    setAuthReady(false); setCloudSession(null)
     const applySession = async (session: unknown) => {
       if (cancelled) return
       const valid = Boolean(session)
@@ -62,49 +52,29 @@ export default function App() {
       if (!valid && signedIn) await signOut()
       if (!cancelled) setAuthReady(true)
     }
-
-    void client.auth.getSession()
-      .then(({ data, error }) => {
-        if (error) return applySession(null)
-        return applySession(data.session)
-      })
-      .catch(() => applySession(null))
-
-    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
-      void applySession(session)
-    })
-
-    return () => {
-      cancelled = true
-      listener.subscription.unsubscribe()
-    }
+    void client.auth.getSession().then(({ data, error }) => error ? applySession(null) : applySession(data.session)).catch(() => applySession(null))
+    const { data: listener } = client.auth.onAuthStateChange((_event, session) => { void applySession(session) })
+    return () => { cancelled = true; listener.subscription.unsubscribe() }
   }, [ready, role, signedIn, signIn, signOut])
 
   if (!ready || (role === 'parent' && hasCloud() && !authReady)) return <Splash />
   const portal = native || forcedApp() ? null : currentPortalRoute()
   if (portal) return <Portal route={portal} />
-  if (wide && !native && showcaseRequested()) return <><PolicyBridge /><CloudBridge /><Showcase /></>
+  if (wide && !native && showcaseRequested()) return <><PolicyBridge /><PolicyV2Bridge /><CloudBridge /><Showcase /></>
   if (!onboarded) return <div className="safe-top flex h-full flex-col bg-white"><Onboarding index={card} onNext={() => setCard((c) => Math.min(2, c + 1) as 0 | 1 | 2)} /></div>
   if (!role) return <div className="safe-top flex h-full flex-col bg-white"><RoleGate /></div>
   if (role === 'child') return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id="childHome" /></div>
-
-  // For cloud-backed parent accounts, Supabase is the authentication source of truth.
-  // Local signedIn is retained only for non-cloud/test builds and legacy UI state.
   const parentSignedIn = hasCloud() ? cloudSession === true : signedIn
   if (!parentSignedIn) return <div className="safe-top flex h-full flex-col bg-white"><Login onSignedIn={signIn} /></div>
-
   const isWebScreen = WEB_SCREENS.includes(state.screen)
   const screen = isWebScreen ? 'home' : state.screen
-  return (
-    <div className="safe-top relative flex h-full flex-col bg-white">
-      <PolicyBridge /><CloudBridge /><CloudHydrate /><NotesBridge /><PushBridge /><CloudCommandBridge />
-      <button type="button" onClick={() => void signOut()} className="absolute right-3 top-3 z-50 rounded-full border border-line bg-white px-3 py-1.5 text-[11px] font-bold text-body shadow-sm">Sign out</button>
-      <div className="min-h-0 flex-1 overflow-y-auto"><UpdateBanner /><Screen id={screen} /></div>
-      {showsTabBar(screen) ? <TabBar /> : null}
-    </div>
-  )
+  return <div className="safe-top relative flex h-full flex-col bg-white">
+    <PolicyBridge /><PolicyV2Bridge /><CloudBridge /><CloudHydrate /><NotesBridge /><PushBridge /><CloudCommandBridge />
+    <button type="button" onClick={() => void signOut()} className="absolute right-3 top-3 z-50 rounded-full border border-line bg-white px-3 py-1.5 text-[11px] font-bold text-body shadow-sm">Sign out</button>
+    <div className="min-h-0 flex-1 overflow-y-auto"><UpdateBanner /><Screen id={screen} /></div>
+    {showsTabBar(screen) ? <TabBar /> : null}
+  </div>
 }
-
 function Splash() { return <div className="flex h-full items-center justify-center bg-brand"><div className="h-12 w-12 rounded-full border-[6px] border-mint" /></div> }
 function forcedApp(): boolean { return flag('app') }
 function showcaseRequested(): boolean { return flag('showcase') }
