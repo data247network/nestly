@@ -1,0 +1,110 @@
+import { useCallback, useEffect, useState } from 'react'
+import { hasCloud, supabase } from './client'
+import type { ChildRequest, DeviceRecord, Routine, SafeZone } from '../domain/v2'
+
+export type V2Location = {
+  childId: string
+  latitude: number
+  longitude: number
+  accuracyM: number | null
+  battery: number | null
+  recordedAt: string
+}
+
+export type V2Dashboard = {
+  devices: DeviceRecord[]
+  requests: ChildRequest[]
+  routines: Routine[]
+  safeZones: SafeZone[]
+  locations: V2Location[]
+}
+
+const empty: V2Dashboard = { devices: [], requests: [], routines: [], safeZones: [], locations: [] }
+
+function mapDevice(row: Record<string, unknown>): DeviceRecord {
+  return {
+    id: String(row.id), householdId: String(row.household_id), childId: row.child_id as string | null,
+    installId: String(row.install_id), platform: String(row.platform), displayName: row.display_name as string | null,
+    enrollmentState: row.enrollment_state as DeviceRecord['enrollmentState'],
+    managementMode: row.management_mode as DeviceRecord['managementMode'], lastSeenAt: row.last_seen_at as string | null,
+  }
+}
+
+function mapRequest(row: Record<string, unknown>): ChildRequest {
+  return {
+    id: String(row.id), householdId: String(row.household_id), childId: String(row.child_id), deviceId: row.device_id as string | null,
+    kind: row.kind as ChildRequest['kind'], payload: (row.payload ?? {}) as Record<string, unknown>,
+    status: row.status as ChildRequest['status'], requestedAt: String(row.requested_at),
+  }
+}
+
+export async function loadV2Dashboard(householdId: string): Promise<V2Dashboard> {
+  if (!hasCloud()) return empty
+  const db = supabase()
+  const [{ data: devices }, { data: requests }, { data: routines }, { data: zones }, { data: locations }] = await Promise.all([
+    db.from('devices').select('*').eq('household_id', householdId).order('updated_at', { ascending: false }),
+    db.from('child_requests').select('*').eq('household_id', householdId).eq('status', 'pending').order('requested_at', { ascending: false }).limit(10),
+    db.from('routines').select('*').eq('household_id', householdId).eq('active', true).order('name'),
+    db.from('safe_zones').select('*').eq('household_id', householdId).eq('active', true).order('name'),
+    db.from('device_locations').select('*').order('updated_at', { ascending: false }),
+  ])
+
+  return {
+    devices: (devices ?? []).map((row) => mapDevice(row as Record<string, unknown>)),
+    requests: (requests ?? []).map((row) => mapRequest(row as Record<string, unknown>)),
+    routines: (routines ?? []).map((row) => ({
+      id: String(row.id), householdId: String(row.household_id), childId: row.child_id as string | null,
+      name: String(row.name), timezone: String(row.timezone), schedule: (row.schedule ?? {}) as Record<string, unknown>,
+      policyProfileId: row.policy_profile_id as string | null, action: (row.action ?? {}) as Record<string, unknown>, active: Boolean(row.active),
+    })),
+    safeZones: (zones ?? []).map((row) => ({
+      id: String(row.id), householdId: String(row.household_id), name: String(row.name),
+      latitude: Number(row.latitude), longitude: Number(row.longitude), radiusM: Number(row.radius_m),
+      active: Boolean(row.active), childIds: (row.child_ids ?? []) as string[],
+    })),
+    locations: (locations ?? []).map((row) => ({
+      childId: String(row.child_id), latitude: Number(row.latitude), longitude: Number(row.longitude),
+      accuracyM: row.accuracy_m == null ? null : Number(row.accuracy_m), battery: row.battery == null ? null : Number(row.battery),
+      recordedAt: String(row.recorded_at),
+    })),
+  }
+}
+
+export function useV2Dashboard(householdId?: string): { data: V2Dashboard; loading: boolean; error: string | null; refresh: () => Promise<void> } {
+  const [data, setData] = useState<V2Dashboard>(empty)
+  const [loading, setLoading] = useState(Boolean(householdId && hasCloud()))
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!householdId || !hasCloud()) { setData(empty); setLoading(false); return }
+    setLoading(true)
+    try { setData(await loadV2Dashboard(householdId)); setError(null) }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not refresh the family dashboard.') }
+    finally { setLoading(false) }
+  }, [householdId])
+
+  useEffect(() => { void refresh() }, [refresh])
+  return { data, loading, error, refresh }
+}
+
+export async function resolveChildRequest(request: ChildRequest, approved: boolean): Promise<void> {
+  if (!hasCloud()) throw new Error('Cloud service is not configured.')
+  const db = supabase()
+  const { error } = await db.from('child_requests').update({
+    status: approved ? 'approved' : 'declined', resolved_at: new Date().toISOString(), resolution: { approved },
+  }).eq('id', request.id).eq('status', 'pending')
+  if (error) throw error
+
+  // An approved screen-time request becomes an explicit reward transaction so
+  // the child-side policy engine can consume it without special-case logic.
+  if (approved && request.kind === 'extra_screen_time') {
+    const minutes = Number(request.payload.minutes ?? request.payload.screenTimeMinutes ?? 0)
+    if (Number.isFinite(minutes) && minutes > 0) {
+      const { error: rewardError } = await db.from('reward_transactions').insert({
+        household_id: request.householdId, child_id: request.childId, source: 'request', status: 'approved',
+        payload: { screenTimeMinutes: Math.floor(minutes), requestId: request.id },
+      })
+      if (rewardError) throw rewardError
+    }
+  }
+}
