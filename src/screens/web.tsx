@@ -1,5 +1,4 @@
 import { fmtDuration, useStore } from '../app/store'
-import { stamp } from '../app/time'
 import { Avatar, Display, MapCanvas } from '../ui/kit'
 import { useCloudChildren } from '../app/CloudWatch'
 import { useV2Dashboard } from '../cloud/v2'
