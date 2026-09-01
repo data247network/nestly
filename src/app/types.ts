@@ -1,6 +1,6 @@
 export type ScreenId =
   | 'onboard1' | 'onboard2' | 'onboard3' | 'login' | 'addChild' | 'enrollDevice'
-  | 'home' | 'v2control' | 'map' | 'geofence' | 'screentime' | 'scenario' | 'activity' | 'trail' | 'contacts' | 'alerts' | 'acoustic' | 'hub' | 'tips' | 'report'
+  | 'home' | 'v2control' | 'schoolModeV2' | 'map' | 'geofence' | 'screentime' | 'scenario' | 'activity' | 'trail' | 'contacts' | 'alerts' | 'acoustic' | 'hub' | 'tips' | 'report'
   | 'roleGate' | 'pair' | 'childSetup' | 'plans' | 'household'
   | 'childHome' | 'childRoutines' | 'childRequests' | 'childRewards' | 'childLock' | 'childNotice' | 'webOverview' | 'webSplit' | 'paywall'
 
