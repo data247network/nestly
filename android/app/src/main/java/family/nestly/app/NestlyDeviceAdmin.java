@@ -8,29 +8,16 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 
 /**
- * Uninstall resistance, and an honest account of its limits.
+ * Android Enterprise admin receiver.
  *
- * An active device administrator cannot be uninstalled. Android refuses, and
- * sends the user to Settings to deactivate it first — which is the point: it
- * turns "tap and hold, uninstall" into a deliberate, multi-step act that this
- * app finds out about.
- *
- * WHAT THIS IS NOT. It is not a lock on the phone. A child who wants the app
- * gone can deactivate this in Settings and then uninstall. Only Device Owner
- * provisioning genuinely prevents that, and it requires a factory reset and
- * enrolment from first boot — not something a family will do to a phone that is
- * already in use.
- *
- * So the design goal is not prevention, which is unattainable. It is that
- * nothing can be turned off quietly. `onDisableRequested` warns, and
- * `onDisabled` records the fact so the parent is told within seconds — a speed
- * bump with a witness.
+ * Legacy Device Admin is retained only as a compatibility fallback. Real
+ * production management is Device Owner + LockTask; a legacy admin alone is
+ * explicitly not treated as uninstall-proof.
  */
 public class NestlyDeviceAdmin extends DeviceAdminReceiver {
-
-    /** Where a tamper is left for the agent to pick up on its next tick. */
     static final String PREFS = "nestly.tamper";
     static final String KEY_ADMIN_OFF_AT = "adminDisabledAt";
+    static final String KEY_DEVICE_OWNER_CONFIGURED_AT = "deviceOwnerConfiguredAt";
 
     public static ComponentName component(Context ctx) {
         return new ComponentName(ctx, NestlyDeviceAdmin.class);
@@ -42,34 +29,38 @@ public class NestlyDeviceAdmin extends DeviceAdminReceiver {
         return dpm != null && dpm.isAdminActive(component(ctx));
     }
 
-    /** The system screen that asks the user to turn protection on. */
     public static Intent enableIntent(Context ctx) {
         Intent i = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
         i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, component(ctx));
         i.putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "Nestly asks for this so the app cannot be removed without your parent knowing. "
-                        + "It does not give anyone access to your messages, photos or accounts.");
+                "Nestly uses device administration to provide safety controls. "
+                        + "On fully managed devices, Nestly uses Android Device Owner for stronger protection.");
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         return i;
     }
 
-    /**
-     * Shown by Android on the confirmation screen when someone tries to turn
-     * this off. It cannot block the action — no app can — so it is written to
-     * be informative rather than threatening.
-     */
     @Override
     public CharSequence onDisableRequested(Context context, Intent intent) {
-        return "Turning this off lets Nestly be uninstalled, and tells your parent it happened.";
+        return "Turning off Nestly protection allows the safety component to be removed and will be reported to the parent.";
     }
 
     @Override
     public void onDisabled(Context context, Intent intent) {
-        // Recorded rather than reported from here: a broadcast receiver is a
-        // poor place to do network work, and the agent is already the thing
-        // that owns the event log and the uplink.
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         prefs.edit().putLong(KEY_ADMIN_OFF_AT, System.currentTimeMillis()).apply();
+    }
+
+    /** Called by Android Enterprise after Device Owner provisioning completes. */
+    @Override
+    public void onProfileProvisioningComplete(Context context, Intent intent) {
+        super.onProfileProvisioningComplete(context, intent);
+        boolean configured = NestlyDeviceOwner.configure(context);
+        if (configured) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong(KEY_DEVICE_OWNER_CONFIGURED_AT, System.currentTimeMillis())
+                    .apply();
+        }
     }
 }
