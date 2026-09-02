@@ -15,6 +15,7 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.PluginMethod;
 
 /** Capacitor bridge for child-device safety locking and Device Owner status. */
 @CapacitorPlugin(name = "NestlySafetyLock")
@@ -32,19 +33,16 @@ public class NestlySafetyLockPlugin extends Plugin {
         result.put("callPermission", NestlyDeviceOwner.hasCallPermission(context));
         result.put("canLock", NestlyDeviceOwner.isLockTaskPermitted(context));
 
-        SharedPreferences prefs = context.getSharedPreferences(
-                NestlyDeviceAdmin.PREFS, Context.MODE_PRIVATE);
+        SharedPreferences prefs = context.getSharedPreferences(NestlyDeviceAdmin.PREFS, Context.MODE_PRIVATE);
         result.put("adminDisabledAt", prefs.getLong(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT, 0L));
-        result.put("deviceOwnerConfiguredAt", prefs.getLong(
-                NestlyDeviceAdmin.KEY_DEVICE_OWNER_CONFIGURED_AT, 0L));
+        result.put("deviceOwnerConfiguredAt", prefs.getLong(NestlyDeviceAdmin.KEY_DEVICE_OWNER_CONFIGURED_AT, 0L));
         call.resolve(result);
     }
 
     @PluginMethod
     public void clearTamper(PluginCall call) {
-        SharedPreferences prefs = getContext().getSharedPreferences(
-                NestlyDeviceAdmin.PREFS, Context.MODE_PRIVATE);
-        prefs.edit().remove(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT).apply();
+        getContext().getSharedPreferences(NestlyDeviceAdmin.PREFS, Context.MODE_PRIVATE)
+                .edit().remove(NestlyDeviceAdmin.KEY_ADMIN_OFF_AT).apply();
         call.resolve();
     }
 
@@ -63,10 +61,7 @@ public class NestlySafetyLockPlugin extends Plugin {
     @PluginMethod
     public void lock(PluginCall call) {
         Activity activity = getActivity();
-        if (activity == null) {
-            call.reject("Activity unavailable");
-            return;
-        }
+        if (activity == null) { call.reject("Activity unavailable"); return; }
         boolean locked = NestlyDeviceOwner.lock(activity);
         JSObject result = new JSObject();
         result.put("locked", locked);
@@ -79,47 +74,24 @@ public class NestlySafetyLockPlugin extends Plugin {
     @PluginMethod
     public void unlock(PluginCall call) {
         Activity activity = getActivity();
-        if (activity == null) {
-            call.reject("Activity unavailable");
-            return;
-        }
+        if (activity == null) { call.reject("Activity unavailable"); return; }
         call.resolve(new JSObject().put("unlocked", NestlyDeviceOwner.unlock(activity)));
     }
 
-    /**
-     * Place a parent-configured safety call without opening the dialler. This
-     * keeps School Lock in LockTask while Android Telecom handles the call.
-     */
+    /** Place a parent-configured safety call without opening the dialler. */
     @PluginMethod
     public void callSafetyContact(PluginCall call) {
         String number = call.getString("number", "").trim();
-        if (number.isEmpty()) {
-            call.reject("A safety contact number is required");
-            return;
-        }
-        if (!NestlyDeviceOwner.isDeviceOwner(getContext())) {
-            call.reject("Safety calling requires a managed Device Owner device");
-            return;
-        }
-        if (!NestlyDeviceOwner.hasCallPermission(getContext())) {
-            call.reject("CALL_PHONE permission is not granted by device policy");
-            return;
-        }
+        if (number.isEmpty()) { call.reject("A safety contact number is required"); return; }
+        if (!NestlyDeviceOwner.isDeviceOwner(getContext())) { call.reject("Safety calling requires a managed Device Owner device"); return; }
+        if (!NestlyDeviceOwner.hasCallPermission(getContext())) { call.reject("CALL_PHONE permission is not granted by device policy"); return; }
         try {
             TelecomManager telecom = (TelecomManager) getContext().getSystemService(Context.TELECOM_SERVICE);
-            if (telecom == null) {
-                call.reject("Telecom service unavailable");
-                return;
-            }
-            Uri address = Uri.fromParts("tel", number, null);
-            Bundle extras = new Bundle();
-            telecom.placeCall(address, extras);
+            if (telecom == null) { call.reject("Telecom service unavailable"); return; }
+            telecom.placeCall(Uri.fromParts("tel", number, null), new Bundle());
             call.resolve(new JSObject().put("started", true));
-        } catch (SecurityException e) {
-            call.reject("Android denied the safety call", e);
-        } catch (IllegalArgumentException e) {
-            call.reject("Invalid safety contact number", e);
-        }
+        } catch (SecurityException e) { call.reject("Android denied the safety call", e); }
+        catch (IllegalArgumentException e) { call.reject("Invalid safety contact number", e); }
     }
 
     @PluginMethod
