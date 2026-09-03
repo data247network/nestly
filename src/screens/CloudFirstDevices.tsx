@@ -3,6 +3,7 @@ import { useCloudChildren } from '../app/CloudWatch'
 import { useStore } from '../app/store'
 import { PairChild } from './setup'
 import { useV2Dashboard } from '../cloud/v2'
+import { sendParentCommand } from '../cloud/commands'
 
 /** Cloud-enrolled children and the v2 device registry are the primary device view. */
 export function CloudFirstDevices() {
@@ -10,6 +11,8 @@ export function CloudFirstDevices() {
   const { data: v2, loading, refresh } = useV2Dashboard(household?.id)
   const { go, dispatch } = useStore()
   const [showBluetooth, setShowBluetooth] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
 
   if (showBluetooth) {
     return (
@@ -18,6 +21,20 @@ export function CloudFirstDevices() {
         <div className="min-h-0 flex-1"><PairChild /></div>
       </div>
     )
+  }
+
+  const runCommand = async (childId: string, command: 'locate' | 'lock') => {
+    setBusy(`${childId}:${command}`)
+    setActionMessage(null)
+    try {
+      await sendParentCommand(childId, command)
+      setActionMessage(command === 'locate' ? 'Location request sent. Waiting for the child device.' : 'Lock request sent. Check Status for delivery.')
+      await refresh()
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'The command could not be sent.')
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
@@ -31,26 +48,43 @@ export function CloudFirstDevices() {
         <button type="button" onClick={() => void refresh()} className="rounded-xl border border-line px-3 py-2 text-[11px] font-bold">{loading ? 'Updating…' : 'Refresh'}</button>
       </div>
 
+      {actionMessage ? <div className="rounded-xl border border-line bg-white px-3 py-2.5 text-[11px] text-body">{actionMessage}</div> : null}
+
       {household?.children.length ? (
         <div className="flex flex-col gap-2.5">
           {household.children.map((child) => {
             const device = v2.devices.find((item) => item.childId === child.id)
+            const active = device?.enrollmentState === 'active'
+            const canLock = active && device?.managementMode === 'device_owner'
             return (
-              <button key={child.id} type="button" onClick={() => { dispatch({ type: 'activeChild', id: child.id }); go('screentime') }} className="rounded-2xl bg-cream px-3.5 py-3 text-left">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-sm font-bold text-white">{child.name.slice(0, 1).toUpperCase()}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13.5px] font-bold">{child.name}</div>
-                    <div className="text-[11.5px] text-body">{device?.displayName ?? (child.lastSeenAt ? 'Cloud-connected device' : 'Waiting for device registration')}</div>
+              <div key={child.id} className="rounded-2xl bg-cream px-3.5 py-3">
+                <button type="button" onClick={() => { dispatch({ type: 'activeChild', id: child.id }); go('screentime') }} className="w-full text-left">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-sm font-bold text-white">{child.name.slice(0, 1).toUpperCase()}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13.5px] font-bold">{child.name}</div>
+                      <div className="text-[11.5px] text-body">{device?.displayName ?? (child.lastSeenAt ? 'Cloud-connected device' : 'Waiting for device registration')}</div>
+                    </div>
+                    <div className={`h-2.5 w-2.5 rounded-full ${active || child.lastSeenAt ? 'bg-brand' : 'bg-muted'}`} />
                   </div>
-                  <div className={`h-2.5 w-2.5 rounded-full ${device?.enrollmentState === 'active' || child.lastSeenAt ? 'bg-brand' : 'bg-muted'}`} />
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-[10.5px] text-body">
-                  <span className="rounded-lg bg-white px-2 py-1.5">State: <b>{device?.enrollmentState ?? 'pending'}</b></span>
-                  <span className="rounded-lg bg-white px-2 py-1.5">Mode: <b>{device?.managementMode ?? 'standard'}</b></span>
-                  <span className="rounded-lg bg-white px-2 py-1.5">Cloud: <b>{child.lastSeenAt ? 'connected' : 'waiting'}</b></span>
-                </div>
-              </button>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-[10.5px] text-body">
+                    <span className="rounded-lg bg-white px-2 py-1.5">State: <b>{device?.enrollmentState ?? 'pending'}</b></span>
+                    <span className="rounded-lg bg-white px-2 py-1.5">Mode: <b>{device?.managementMode ?? 'standard'}</b></span>
+                    <span className="rounded-lg bg-white px-2 py-1.5">Cloud: <b>{child.lastSeenAt ? 'connected' : 'waiting'}</b></span>
+                  </div>
+                </button>
+
+                {active ? (
+                  <div className="mt-3 border-t border-line/60 pt-3">
+                    <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-body">Remote controls</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" disabled={busy !== null} onClick={() => void runCommand(child.id, 'locate')} className="rounded-xl border border-line bg-white px-3 py-2 text-[11px] font-bold disabled:opacity-50">{busy === `${child.id}:locate` ? 'Requesting…' : 'Request location'}</button>
+                      <button type="button" disabled={busy !== null || !canLock} onClick={() => void runCommand(child.id, 'lock')} className="rounded-xl bg-brand px-3 py-2 text-[11px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">{busy === `${child.id}:lock` ? 'Sending…' : 'Lock device'}</button>
+                    </div>
+                    {!canLock ? <div className="mt-2 text-[10px] leading-relaxed text-body">Remote locking requires this Android device to be enrolled as a Device Owner. This device is currently in standard management.</div> : null}
+                  </div>
+                ) : null}
+              </div>
             )
           })}
         </div>
