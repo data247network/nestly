@@ -1,0 +1,47 @@
+name: Architecture v2 validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Unit and policy protocol tests
+        run: npm test -- --runInBand
+
+      - name: TypeScript validation
+        run: npx tsc --noEmit
+
+      - name: Start web app
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 5174 > /tmp/nestly-vite.log 2>&1 &
+          for i in {1..30}; do
+            curl -fsS http://127.0.0.1:5174/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/nestly-vite.log
+          exit 1
+
+      - name: Two-device UI wiring validation
+        run: npm run verify:devices
