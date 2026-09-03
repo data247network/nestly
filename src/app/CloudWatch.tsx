@@ -14,14 +14,17 @@ const REFRESH_INTERVAL_MS = 15_000
 export function useCloudChildren(): {
   household: HouseholdSummary | null
   updatedAt: number | null
+  loading: boolean
 } {
   const { role } = useDevice()
   const [household, setHousehold] = useState<HouseholdSummary | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
   const householdId = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     if (!householdId.current) return
+    setLoading(true)
     try {
       const next = await loadHousehold(householdId.current)
       if (next) {
@@ -30,17 +33,27 @@ export function useCloudChildren(): {
       }
     } catch {
       // Keep the last successful cloud snapshot while offline.
+    } finally {
+      setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    if (!hasCloud() || role !== 'parent') return
+    if (!hasCloud() || role !== 'parent') {
+      setLoading(false)
+      return
+    }
     let cancelled = false
+    setLoading(true)
     void (async () => {
       // Always resolve the authenticated user's membership first. A cached
       // household can survive sign-out/re-sign-in and point at an old family.
       const id = await existingHouseholdId().catch(() => null)
-      if (cancelled || !id) return
+      if (cancelled) return
+      if (!id) {
+        setLoading(false)
+        return
+      }
       householdId.current = id
       await refresh()
     })()
@@ -88,5 +101,5 @@ export function useCloudChildren(): {
     }
   }, [role, refresh])
 
-  return { household, updatedAt }
+  return { household, updatedAt, loading }
 }
