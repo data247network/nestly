@@ -2,8 +2,8 @@
   "versionCode": 19,
   "versionName": "1.18",
   "url": "https://nestly-gamma-seven.vercel.app/downloads/nestly.apk",
-  "sha256": "71f2bd8e1c8f1e505d8ff76928f298cc88a64a40fb082887f9b834d229aa054e",
-  "size": 5326751,
+  "sha256": "401b327733a40b9e035a987518395ade7186b9b71d1d619b490695859e07daaa",
+  "size": 5326965,
   "notes": "Improved child cloud sync and automatic update notices.",
-  "publishedAt": "2026-09-03T19:11:00.445Z"
+  "publishedAt": "2026-09-03T20:31:23.722Z"
 }
