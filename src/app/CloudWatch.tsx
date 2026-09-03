@@ -15,6 +15,7 @@ export function useCloudChildren(): {
   household: HouseholdSummary | null
   updatedAt: number | null
   loading: boolean
+  refresh: () => Promise<void>
 } {
   const { role } = useDevice()
   const [household, setHousehold] = useState<HouseholdSummary | null>(null)
@@ -23,7 +24,10 @@ export function useCloudChildren(): {
   const householdId = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
-    if (!householdId.current) return
+    if (!householdId.current) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const next = await loadHousehold(householdId.current)
@@ -101,5 +105,5 @@ export function useCloudChildren(): {
     }
   }, [role, refresh])
 
-  return { household, updatedAt, loading }
+  return { household, updatedAt, loading, refresh }
 }
