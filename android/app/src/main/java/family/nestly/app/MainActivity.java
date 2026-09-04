@@ -12,6 +12,8 @@ import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1002;
+    private static final String CAP_STORE = "CapacitorStorage";
+    private static final String KEY_ENROLMENT = "nestly.enrolment";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -23,19 +25,36 @@ public class MainActivity extends BridgeActivity {
             getBridge().registerPlugin(NestlyUpdaterPlugin.class);
         }
 
-        // Do not start the child-only command agent on every Nestly install.
-        // Parent devices have no child enrolment and should never create the
-        // remote-messaging foreground service. A child starts it once its local
-        // enrolment record exists; onResume also covers completion of setup.
-        NestlyCommandService.startIfEnrolled(this);
+        startChildCommandServiceIfEnrolled();
         requestNotificationPermissionIfNeeded();
     }
 
     @Override
     public void onResume() {
         super.onResume();
-        // Re-check after setup/pairing screens return to the main Activity.
-        NestlyCommandService.startIfEnrolled(this);
+        startChildCommandServiceIfEnrolled();
+    }
+
+    /**
+     * Starts the native command agent only when this installation has a
+     * completed child enrolment record. Parent installations do not have this
+     * record and therefore never start the foreground command service.
+     */
+    private void startChildCommandServiceIfEnrolled() {
+        String raw = getSharedPreferences(CAP_STORE, MODE_PRIVATE)
+                .getString(KEY_ENROLMENT, null);
+        if (raw == null || raw.isEmpty()) return;
+
+        try {
+            org.json.JSONObject enrolment = new org.json.JSONObject(raw);
+            String childId = enrolment.optString("childId", "");
+            String deviceSecret = enrolment.optString("deviceSecret", "");
+            if (!childId.isEmpty() && !deviceSecret.isEmpty()) {
+                NestlyCommandService.start(this);
+            }
+        } catch (org.json.JSONException ignored) {
+            // Invalid/partial enrolment data must never crash app startup.
+        }
     }
 
     private void requestNotificationPermissionIfNeeded() {
