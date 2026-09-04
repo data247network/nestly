@@ -23,11 +23,19 @@ public class MainActivity extends BridgeActivity {
             getBridge().registerPlugin(NestlyUpdaterPlugin.class);
         }
 
-        // The child command transport is native so remote lock does not depend
-        // on a WebView timer or the app being visible. The service is harmless
-        // on a parent install because it exits when no child enrolment exists.
-        NestlyCommandService.start(this);
+        // Do not start the child-only command agent on every Nestly install.
+        // Parent devices have no child enrolment and should never create the
+        // remote-messaging foreground service. A child starts it once its local
+        // enrolment record exists; onResume also covers completion of setup.
+        NestlyCommandService.startIfEnrolled(this);
         requestNotificationPermissionIfNeeded();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // Re-check after setup/pairing screens return to the main Activity.
+        NestlyCommandService.startIfEnrolled(this);
     }
 
     private void requestNotificationPermissionIfNeeded() {
@@ -40,13 +48,5 @@ public class MainActivity extends BridgeActivity {
                 new String[]{Manifest.permission.POST_NOTIFICATIONS},
                 NOTIFICATION_PERMISSION_REQUEST
         );
-    }
-
-    @Override
-    public void onResume() {
-        super.onResume();
-        // A Device Owner child app is expected to remain the foreground safety
-        // surface. The JS agent controls when the lock is entered; the native
-        // command service handles remote lock while the UI is closed.
     }
 }
