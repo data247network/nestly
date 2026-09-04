@@ -29,7 +29,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Native background command transport for the child device.
+ * Native background command transport for an enrolled child device.
  *
  * Architecture v2 keeps lock commands out of the WebView-only polling path.
  * This small foreground service polls the authenticated child command endpoint
@@ -38,9 +38,9 @@ import java.nio.charset.StandardCharsets;
  * filtered to the native transport so the JavaScript pump continues to own
  * locate/unlock/refresh commands.
  *
- * This is intentionally boring and defensive: no account token is stored here;
- * the existing per-device child secret is read from Capacitor Preferences,
- * which is the same private Android SharedPreferences store used by the app.
+ * The service only starts its foreground work when a child enrolment exists.
+ * The child secret is read from Capacitor Preferences, which is the same private
+ * Android SharedPreferences store used by the app.
  */
 public class NestlyCommandService extends Service {
     private static final String TAG = "NestlyCommand";
@@ -59,11 +59,8 @@ public class NestlyCommandService extends Service {
     private final Runnable pollTick = new Runnable() {
         @Override public void run() {
             if (stopped) return;
-            try {
-                pollOnce();
-            } catch (Throwable t) {
-                Log.w(TAG, "command poll failed", t);
-            }
+            try { pollOnce(); }
+            catch (Throwable t) { Log.w(TAG, "command poll failed", t); }
             if (!stopped && handler != null) handler.postDelayed(this, POLL_MS);
         }
     };
@@ -71,11 +68,8 @@ public class NestlyCommandService extends Service {
     public static void start(Context context) {
         Intent intent = new Intent(context, NestlyCommandService.class);
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent);
-            } else {
-                context.startService(intent);
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
+            else context.startService(intent);
         } catch (RuntimeException e) {
             Log.w(TAG, "unable to start command service", e);
         }
@@ -83,6 +77,10 @@ public class NestlyCommandService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        if (!hasEnrolment()) {
+            stopSelf();
+            return;
+        }
         createChannel();
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Nestly protection is active")
@@ -107,6 +105,10 @@ public class NestlyCommandService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (!hasEnrolment()) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         return START_STICKY;
     }
 
@@ -120,6 +122,16 @@ public class NestlyCommandService extends Service {
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
+
+    private boolean hasEnrolment() {
+        String raw = getSharedPreferences(CAP_STORE, MODE_PRIVATE).getString(KEY_ENROLMENT, null);
+        if (raw == null) return false;
+        try {
+            JSONObject enrolment = new JSONObject(raw);
+            return !enrolment.optString("childId", "").isEmpty()
+                    && !enrolment.optString("deviceSecret", "").isEmpty();
+        } catch (Exception ignored) { return false; }
+    }
 
     private void pollOnce() throws Exception {
         SharedPreferences prefs = getSharedPreferences(CAP_STORE, MODE_PRIVATE);
@@ -234,9 +246,7 @@ public class NestlyCommandService extends Service {
             conn.setConnectTimeout(8_000);
             conn.setReadTimeout(12_000);
             conn.setDoOutput(true);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body.getBytes(StandardCharsets.UTF_8));
-            }
+            try (OutputStream os = conn.getOutputStream()) { os.write(body.getBytes(StandardCharsets.UTF_8)); }
             int code = conn.getResponseCode();
             InputStream stream = code >= 200 && code < 400 ? conn.getInputStream() : conn.getErrorStream();
             String text = read(stream);
