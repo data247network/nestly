@@ -17,6 +17,7 @@ import { Showcase } from './showcase/Showcase'
 import { Portal, currentPortalRoute } from './portal/Portal'
 import { UpdateBanner } from './app/UpdateBanner'
 import { TabBar, showsTabBar } from './ui/TabBar'
+import { NavigationHeader } from './ui/NavigationHeader'
 import { RoleGate } from './screens/setup'
 import { Onboarding } from './screens/onboarding'
 import { Login } from './screens/login'
@@ -70,6 +71,7 @@ export default function App() {
   const screen = isWebScreen ? 'home' : state.screen
   return <div className="safe-top relative flex h-full flex-col bg-white">
     <PolicyBridge /><PolicyV2Bridge /><CloudBridge /><CloudHydrate /><NotesBridge /><PushBridge /><CloudCommandBridge />
+    <NavigationHeader />
     <button type="button" onClick={() => void signOut()} className="absolute right-3 top-3 z-50 rounded-full border border-line bg-white px-3 py-1.5 text-[11px] font-bold text-body shadow-sm">Sign out</button>
     <div className="min-h-0 flex-1 overflow-y-auto"><UpdateBanner /><Screen id={screen} /></div>
     {showsTabBar(screen) ? <TabBar /> : null}
