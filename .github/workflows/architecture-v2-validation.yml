@@ -28,7 +28,7 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Unit and policy protocol tests
-        run: npm test -- --runInBand
+        run: npm test
 
       - name: TypeScript validation
         run: npx tsc --noEmit
