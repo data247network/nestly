@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { childScreenFor } from './nav'
+import { childRenderScreen, childScreenFor } from './nav'
 
 /**
  * `App.tsx` once rendered `childHome` unconditionally for role === 'child',
@@ -25,5 +25,24 @@ describe('childScreenFor', () => {
     expect(childScreenFor('v2control')).toBe('childHome')
     expect(childScreenFor('screentime')).toBe('childHome')
     expect(childScreenFor('paywall')).toBe('childHome')
+  })
+})
+
+/**
+ * `agent.locked` used to only gate the legacy, now-unreachable `ChildHome`.
+ * A device whose native overlay failed to apply (permission revoked or never
+ * granted) showed whatever `state.screen` said — indistinguishable from an
+ * unlocked phone. Locked must always win, regardless of navigation.
+ */
+describe('childRenderScreen', () => {
+  it('forces the lock screen whenever locked, regardless of state.screen', () => {
+    expect(childRenderScreen('childChores', true)).toBe('childLock')
+    expect(childRenderScreen('childHome', true)).toBe('childLock')
+    expect(childRenderScreen('v2control', true)).toBe('childLock')
+  })
+
+  it('falls through to childScreenFor when not locked', () => {
+    expect(childRenderScreen('childChores', false)).toBe('childChores')
+    expect(childRenderScreen('v2control', false)).toBe('childHome')
   })
 })

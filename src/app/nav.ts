@@ -37,6 +37,19 @@ export function surfaceOf(id: ScreenId): Surface { if (WEB_SCREENS.includes(id))
 export function childScreenFor(screen: ScreenId): ScreenId {
   return CHILD_SCREENS.includes(screen) ? screen : 'childHome'
 }
+
+/**
+ * What to render for a child device once the agent's own lock state is
+ * accounted for.
+ *
+ * `agent.locked` used to only gate the (now-dead) legacy `ChildHome`, so a
+ * device where the native overlay fails to apply (permission revoked or
+ * never granted) showed whatever `state.screen` said — indistinguishable
+ * from the phone not being locked at all. Locked always wins over navigation.
+ */
+export function childRenderScreen(screen: ScreenId, locked: boolean): ScreenId {
+  return locked ? 'childLock' : childScreenFor(screen)
+}
 export const TABS: { id: ScreenId; label: string }[] = [
   { id: 'v2control', label: 'Home' }, { id: 'schoolModeV2', label: 'School' }, { id: 'map', label: 'Map' }, { id: 'screentime', label: 'Limits' }, { id: 'hub', label: 'Hub' }, { id: 'pair', label: 'Devices' },
 ]

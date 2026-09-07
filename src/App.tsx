@@ -10,7 +10,7 @@ import { CloudHydrate } from './app/CloudHydrate'
 import { CloudCommandBridge } from './app/CloudCommandBridge'
 import { NotesBridge } from './app/NotesBridge'
 import { PushBridge } from './app/PushBridge'
-import { childScreenFor, WEB_SCREENS } from './app/nav'
+import { childRenderScreen, WEB_SCREENS } from './app/nav'
 import { useStore } from './app/store'
 import { useDevice } from './platform/device'
 import { Showcase } from './showcase/Showcase'
@@ -26,7 +26,7 @@ import { hasCloud, supabase } from './cloud/client'
 export default function App() {
   const native = Capacitor.isNativePlatform()
   const wide = useWideViewport()
-  const { ready, role, onboarded, signedIn, signIn, signOut } = useDevice()
+  const { ready, role, onboarded, signedIn, signIn, signOut, agent } = useDevice()
   const { state } = useStore()
   const [card, setCard] = useState<0 | 1 | 2>(0)
   const [authReady, setAuthReady] = useState(false)
@@ -65,10 +65,12 @@ export default function App() {
   if (!onboarded) return <div className="safe-top flex h-full flex-col bg-white"><Onboarding index={card} onNext={() => setCard((c) => Math.min(2, c + 1) as 0 | 1 | 2)} /></div>
   if (!role) return <div className="safe-top flex h-full flex-col bg-white"><RoleGate /></div>
   if (role === 'child') {
-    // See childScreenFor: this used to hardcode `childHome` regardless of
+    // See childRenderScreen: this used to hardcode `childHome` regardless of
     // state.screen, so every child-side `go(...)` — including the route to the
-    // in-app lock screen — updated state that nothing ever read.
-    return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id={childScreenFor(state.screen)} /></div>
+    // in-app lock screen — updated state that nothing ever read. It also never
+    // consulted `agent.locked`, so a phone whose native overlay failed to
+    // apply (permission revoked or never granted) showed zero enforcement.
+    return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id={childRenderScreen(state.screen, Boolean(agent?.locked))} /></div>
   }
   const parentSignedIn = hasCloud() ? cloudSession === true : signedIn
   if (!parentSignedIn) return <div className="safe-top flex h-full flex-col bg-white"><Login onSignedIn={signIn} /></div>
