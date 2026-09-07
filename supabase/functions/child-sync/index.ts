@@ -216,24 +216,10 @@ Deno.serve(async (req: Request) => {
       console.error("child-sync: telemetry write failed", error)
       return json({ ok: false, error: "telemetry_write_failed" }, 500)
     }
-
-    // Mirrors the fix onto Architecture v2's `device_locations`, which until
-    // now had a reader (the v2 dashboard) but no writer at all. Best-effort:
-    // `child_telemetry` above is already the durable record of this fix, so a
-    // failure here must not fail the child's upload.
-    if (t.fix?.lat != null && t.fix?.lng != null) {
-      const { error: locationError } = await admin.from("device_locations").upsert({
-        child_id: childId,
-        device_id: null,
-        latitude: t.fix.lat,
-        longitude: t.fix.lng,
-        accuracy_m: t.fix?.acc ?? null,
-        battery: t.battery ?? null,
-        recorded_at: new Date(t.ts ?? Date.now()).toISOString(),
-        updated_at: now,
-      })
-      if (locationError) console.error("child-sync: device_locations mirror failed", locationError)
-    }
+    // `device_locations` does not need a mirror here: `trg_child_telemetry_sync_v2_device`
+    // (2026-09-03 migration) already upserts it from every `child_telemetry`
+    // write via a database trigger. An earlier version of this function
+    // duplicated that in application code before this trigger was found.
   }
 
   if (Array.isArray(body.events) && body.events.length > 0) {
