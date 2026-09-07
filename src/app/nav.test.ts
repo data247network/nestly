@@ -15,6 +15,7 @@ describe('childScreenFor', () => {
     expect(childScreenFor('childRoutines')).toBe('childRoutines')
     expect(childScreenFor('childRequests')).toBe('childRequests')
     expect(childScreenFor('childRewards')).toBe('childRewards')
+    expect(childScreenFor('childHub')).toBe('childHub')
     expect(childScreenFor('childLock')).toBe('childLock')
     expect(childScreenFor('childNotice')).toBe('childNotice')
   })
