@@ -17,13 +17,16 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // All three must register before super.onCreate() — that is when the
+        // bridge reads the plugin list and builds the JS-side registry.
+        // NestlyUpdaterPlugin used to register afterwards via getBridge(),
+        // which meant the JS side's registerPlugin('NestlyUpdater') found
+        // nothing: every call silently rejected, and VersionRow showed a bare
+        // "—" with no error visible anywhere, on a real device.
         registerPlugin(NestlyLinkPlugin.class);
         registerPlugin(NestlySafetyLockPlugin.class);
+        registerPlugin(NestlyUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
-
-        if (getBridge() != null) {
-            getBridge().registerPlugin(NestlyUpdaterPlugin.class);
-        }
 
         startChildCommandServiceIfEnrolled();
         requestNotificationPermissionIfNeeded();
