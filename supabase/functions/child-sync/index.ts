@@ -216,6 +216,24 @@ Deno.serve(async (req: Request) => {
       console.error("child-sync: telemetry write failed", error)
       return json({ ok: false, error: "telemetry_write_failed" }, 500)
     }
+
+    // Mirrors the fix onto Architecture v2's `device_locations`, which until
+    // now had a reader (the v2 dashboard) but no writer at all. Best-effort:
+    // `child_telemetry` above is already the durable record of this fix, so a
+    // failure here must not fail the child's upload.
+    if (t.fix?.lat != null && t.fix?.lng != null) {
+      const { error: locationError } = await admin.from("device_locations").upsert({
+        child_id: childId,
+        device_id: null,
+        latitude: t.fix.lat,
+        longitude: t.fix.lng,
+        accuracy_m: t.fix?.acc ?? null,
+        battery: t.battery ?? null,
+        recorded_at: new Date(t.ts ?? Date.now()).toISOString(),
+        updated_at: now,
+      })
+      if (locationError) console.error("child-sync: device_locations mirror failed", locationError)
+    }
   }
 
   if (Array.isArray(body.events) && body.events.length > 0) {
@@ -248,6 +266,45 @@ Deno.serve(async (req: Request) => {
     // batch is the normal case here and must not buzz twice.
     if (!error && events.some((e) => NOTIFIABLE.has(e.kind))) {
       await notify(childId)
+    }
+
+    // Mirrors zone-enter/zone-leave onto Architecture v2's `location_events`.
+    // `evaluateGeofences` on the child already names the fence in `ref` and
+    // carries the fix in lat/lng, so this is a lookup and an insert, not a new
+    // source of truth — `child_events`/alerts above are unaffected either way.
+    if (!error) {
+      const zoneEvents = events.filter((e) => (e.kind === "zone-enter" || e.kind === "zone-leave") && e.ref)
+      if (zoneEvents.length > 0) {
+        const names = [...new Set(zoneEvents.map((e) => String(e.ref)))]
+        const { data: zones, error: zonesError } = await admin
+          .from("safe_zones")
+          .select("id, name")
+          .eq("household_id", child.household_id)
+          .in("name", names)
+        if (zonesError) {
+          console.error("child-sync: safe_zones lookup failed", zonesError)
+        } else {
+          const zoneIdByName = new Map((zones ?? []).map((z) => [String(z.name), String(z.id)]))
+          const rows = zoneEvents
+            .map((e) => {
+              const safeZoneId = zoneIdByName.get(String(e.ref))
+              if (!safeZoneId) return null // not yet synced, or since deleted — skip silently
+              return {
+                household_id: child.household_id,
+                child_id: childId,
+                safe_zone_id: safeZoneId,
+                event_type: e.kind === "zone-enter" ? "entered" : "exited",
+                occurred_at: new Date(e.ts).toISOString(),
+                metadata: { lat: e.lat ?? null, lng: e.lng ?? null },
+              }
+            })
+            .filter((row): row is NonNullable<typeof row> => row != null)
+          if (rows.length > 0) {
+            const { error: locationEventError } = await admin.from("location_events").insert(rows)
+            if (locationEventError) console.error("child-sync: location_events mirror failed", locationEventError)
+          }
+        }
+      }
     }
   }
 
