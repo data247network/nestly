@@ -194,7 +194,7 @@ function ChildStatus() {
  * language — not silently, and not from the parent's phone. The child being
  * told what is turned on is the same promise the transparency screen makes.
  */
-function ProtectionSetup() {
+export function ProtectionSetup() {
   const { agent } = useDevice()
   const [busy, setBusy] = useState(false)
   // Read from the agent's snapshot rather than asked for here.

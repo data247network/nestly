@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { useCloudChildren } from '../app/CloudWatch'
 import { useStore } from '../app/store'
+import { useLocate } from '../app/useLocate'
+import { VersionRow } from '../app/VersionRow'
 import { PairChild } from './setup'
 import { useV2Dashboard } from '../cloud/v2'
 import { sendParentCommand } from '../cloud/commands'
+import { ago } from './setup'
 
 /** Cloud-enrolled children and the v2 device registry are the primary device view. */
 export function CloudFirstDevices() {
@@ -23,12 +26,12 @@ export function CloudFirstDevices() {
     )
   }
 
-  const runCommand = async (childId: string, command: 'locate' | 'lock') => {
-    setBusy(`${childId}:${command}`)
+  const runLock = async (childId: string) => {
+    setBusy(`${childId}:lock`)
     setActionMessage(null)
     try {
-      await sendParentCommand(childId, command)
-      setActionMessage(command === 'locate' ? 'Location request sent. Waiting for the child device.' : 'Lock request sent. Check Status for delivery.')
+      await sendParentCommand(childId, 'lock')
+      setActionMessage('Lock request sent. Check Status for delivery.')
       await refresh()
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : 'The command could not be sent.')
@@ -55,7 +58,6 @@ export function CloudFirstDevices() {
           {household.children.map((child) => {
             const device = v2.devices.find((item) => item.childId === child.id)
             const active = device?.enrollmentState === 'active'
-            const canLock = active && device?.managementMode === 'device_owner'
             return (
               <div key={child.id} className="rounded-2xl bg-cream px-3.5 py-3">
                 <button type="button" onClick={() => { dispatch({ type: 'activeChild', id: child.id }); go('screentime') }} className="w-full text-left">
@@ -78,10 +80,9 @@ export function CloudFirstDevices() {
                   <div className="mt-3 border-t border-line/60 pt-3">
                     <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-body">Remote controls</div>
                     <div className="grid grid-cols-2 gap-2">
-                      <button type="button" disabled={busy !== null} onClick={() => void runCommand(child.id, 'locate')} className="rounded-xl border border-line bg-white px-3 py-2 text-[11px] font-bold disabled:opacity-50">{busy === `${child.id}:locate` ? 'Requesting…' : 'Request location'}</button>
-                      <button type="button" disabled={busy !== null || !canLock} onClick={() => void runCommand(child.id, 'lock')} className="rounded-xl bg-brand px-3 py-2 text-[11px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">{busy === `${child.id}:lock` ? 'Sending…' : 'Lock device'}</button>
+                      <LocateControl cloudChildId={child.id} />
+                      <button type="button" disabled={busy !== null} onClick={() => void runLock(child.id)} className="rounded-xl bg-brand px-3 py-2 text-[11px] font-bold text-white disabled:opacity-50">{busy === `${child.id}:lock` ? 'Sending…' : 'Lock device'}</button>
                     </div>
-                    {!canLock ? <div className="mt-2 text-[10px] leading-relaxed text-body">Remote locking requires this Android device to be enrolled as a Device Owner. This device is currently in standard management.</div> : null}
                   </div>
                 ) : null}
               </div>
@@ -92,6 +93,45 @@ export function CloudFirstDevices() {
 
       <button type="button" onClick={() => go('household')} className="rounded-2xl bg-brand px-4 py-3.5 text-left text-white"><span className="block text-[13.5px] font-bold">Add child with setup code</span><span className="mt-0.5 block text-[11.5px] opacity-90">Works remotely — the phones do not need to be together.</span></button>
       <button type="button" onClick={() => setShowBluetooth(true)} className="rounded-2xl border border-line px-4 py-3 text-left"><span className="block text-[13px] font-bold">Pair nearby over Bluetooth</span><span className="mt-0.5 block text-[11.5px] text-body">Optional local connection for offline use and faster nearby sync.</span></button>
+
+      <VersionRow />
+    </div>
+  )
+}
+
+/**
+ * Locate for one child, reusing the hook `parent.tsx` already answers with
+ * correctly. This screen used to call `sendParentCommand(id,'locate')`
+ * instead — a different, parallel path that took a real GPS fix on the
+ * child's phone but never created the `locate_requests` row `child-sync`
+ * needs to know where to put it, so the fix landed nowhere and nothing
+ * here ever showed a result. `useLocate` asks over both Bluetooth and the
+ * cloud correctly and reports back an honest status.
+ */
+function LocateControl({ cloudChildId }: { cloudChildId: string }) {
+  const { status, ask } = useLocate(cloudChildId)
+  const label =
+    status.state === 'asking' ? 'Requesting…' : status.state === 'found' ? 'Locate again' : 'Request location'
+  const detail =
+    status.state === 'found'
+      ? `Found ${ago(status.at)} · ${status.fix.lat.toFixed(4)}, ${status.fix.lng.toFixed(4)}`
+      : status.state === 'timeout'
+        ? 'No answer — their phone may be offline.'
+        : status.state === 'unavailable'
+          ? status.reason
+          : null
+
+  return (
+    <div>
+      <button
+        type="button"
+        disabled={status.state === 'asking'}
+        onClick={() => void ask()}
+        className="w-full rounded-xl border border-line bg-white px-3 py-2 text-[11px] font-bold disabled:opacity-50"
+      >
+        {label}
+      </button>
+      {detail ? <div className="mt-1 text-[10px] leading-snug text-body">{detail}</div> : null}
     </div>
   )
 }

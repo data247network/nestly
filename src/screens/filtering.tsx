@@ -195,10 +195,20 @@ const PEGI_LEVELS = [3, 7, 12, 16, 18] as const
 function AppLimits() {
   const { state, dispatch } = useStore()
   const rules = state.appRules.filter((r) => r.childIds.length === 0 || r.childIds.includes(state.activeChildId))
+  const usage = state.usageByChild[state.activeChildId]
+  const needsUsageAccess = usage != null && !usage.usageAccess
 
   return (
     <>
       <div className="mt-1 text-[13.5px] font-bold">App limits</div>
+
+      {needsUsageAccess ? (
+        <div className="rounded-2xl bg-coralBg px-4 py-3 text-[12.5px] leading-relaxed text-coralInk">
+          <b>App limits are not enforced on their phone.</b> They need to turn
+          on Usage Access from the Nestly home screen there — until they do, a
+          cap or lock set here is saved but has nothing to act on.
+        </div>
+      ) : null}
 
       <div className="rounded-2xl bg-cream px-3.5 py-3">
         <div className="text-[12.5px] font-bold">Age rating (PEGI)</div>

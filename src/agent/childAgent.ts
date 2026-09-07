@@ -331,15 +331,25 @@ export class ChildAgent {
    * Applies per-app caps, individual app locks and the PEGI ceiling to the
    * native app-guard service. No consent dialog involved — unlike the DNS
    * filter, this needs no `VpnService`, only the Usage Access and overlay
-   * permissions the device already has for reporting and locking.
+   * permissions.
+   *
+   * Both are gated here rather than assumed. The guard service silently does
+   * nothing without them — `UsageStatsManager` returns an empty read and the
+   * overlay's own `canDraw` check no-ops — which looked, from a real device,
+   * exactly like "I locked an app but could still use it" with no error
+   * anywhere to explain why. Skipping the start entirely when the rules have
+   * nothing to enforce with is honest about that instead of pretending to be
+   * protected.
    */
   private async applyAppRules() {
     if (!Capacitor.isNativePlatform()) return
+    const rules = this.state.policy?.appRules ?? []
+    const maxPegi = this.state.policy?.maxPegi
+    if ((rules.length > 0 || maxPegi != null) && !(this.snapshot.usageAccess && this.snapshot.overlayAllowed)) {
+      return
+    }
     try {
-      await NestlyLink.setAppRules({
-        rules: this.state.policy?.appRules ?? [],
-        maxPegi: this.state.policy?.maxPegi,
-      })
+      await NestlyLink.setAppRules({ rules, maxPegi })
     } catch {
       // Older build without the method. The child simply runs with no
       // per-app enforcement, same fallback posture as an older filter build.
@@ -657,6 +667,13 @@ export class ChildAgent {
     }
     if (before.usageAccess && !now.usageAccess) {
       await this.record('tamper', 'screen time access')
+    }
+    // The reverse transition: a permission `applyAppRules` was waiting on has
+    // just been granted (typically from ProtectionSetup's own prompt). A
+    // policy that arrived earlier and was skipped for lacking it is retried
+    // now rather than waiting for the next unrelated policy push.
+    if ((!before.overlayAllowed && now.overlayAllowed) || (!before.usageAccess && now.usageAccess)) {
+      await this.applyAppRules()
     }
     // Filtering already has its own dedicated event, and raising both would
     // show a parent the same fact twice under different names.
