@@ -21,6 +21,9 @@ export function useChildRewards(){const[rewards,setRewards]=useState<RewardTrans
 export async function createChildRequest(input:{kind:RequestKind;payload:Record<string,unknown>;deviceId?:string}):Promise<void>{if(!hasCloud())throw new Error('Cloud service is not configured.');const enrolment=await loadJSON<Enrolment|null>(ENROLMENT_KEY,null);if(!enrolment)throw new Error('This device is not linked to a family yet. Enter the setup code first.');const{error}=await supabase().from('child_requests').insert({household_id:enrolment.householdId,child_id:enrolment.childId,device_id:input.deviceId??null,kind:input.kind,payload:input.payload,status:'pending',requested_at:new Date().toISOString()});if(error)throw error}
 export async function resolveChildRequest(request:ChildRequest,approved:boolean):Promise<void>{if(!hasCloud())throw new Error('Cloud service is not configured.');const db=supabase();const{error}=await db.from('child_requests').update({status:approved?'approved':'declined',resolved_at:new Date().toISOString(),resolution:{approved}}).eq('id',request.id).eq('status','pending');if(error)throw error;if(approved&&request.kind==='extra_screen_time'){const minutes=Number(request.payload.minutes??request.payload.screenTimeMinutes??0);if(Number.isFinite(minutes)&&minutes>0){const{error:rewardError}=await db.from('reward_transactions').insert({household_id:request.householdId,child_id:request.childId,source:'request',status:'approved',payload:{screenTimeMinutes:Math.floor(minutes),requestId:request.id}});if(rewardError)throw rewardError}}}
 
+/** Resolved requests (approved/declined/expired/cancelled) for the parent's history view. Pending ones live in `loadV2Dashboard` instead. */
+export async function loadRequestHistory(householdId:string):Promise<ChildRequest[]>{if(!hasCloud())return[];const{data,error}=await supabase().from('child_requests').select('*').eq('household_id',householdId).neq('status','pending').order('requested_at',{ascending:false}).limit(50);if(error)throw error;return(data??[]).map(r=>mapRequest(r as Record<string,unknown>))}
+
 /* ------------------------------------------------------------------ chores */
 //
 // The parent side of chores is ordinary authenticated access — RLS already
@@ -39,7 +42,7 @@ export type Chore = {
   description: string | null
   dueAt: string | null
   reward: ChoreReward
-  status: 'open' | 'submitted' | 'approved' | 'declined' | 'cancelled' | 'completed'
+  status: 'open' | 'submitted' | 'approved' | 'declined' | 'cancelled' | 'completed' | 'in_progress' | 'not_done'
   createdAt: string
 }
 
@@ -49,7 +52,7 @@ export type ChoreSubmission = {
   childId: string
   note: string | null
   submittedAt: string
-  chore: { title: string; reward: ChoreReward; householdId: string } | null
+  chore: { title: string; reward: ChoreReward; householdId: string; dueAt: string | null } | null
 }
 
 function mapChore(row: Record<string, unknown>): Chore {
@@ -90,7 +93,7 @@ export async function loadPendingChoreSubmissions(householdId: string): Promise<
   if (!hasCloud()) return []
   const { data, error } = await supabase()
     .from('chore_submissions')
-    .select('id, chore_id, child_id, note, submitted_at, chores!inner(title, reward, household_id)')
+    .select('id, chore_id, child_id, note, submitted_at, chores!inner(title, reward, household_id, due_at)')
     .eq('status', 'pending')
     .eq('chores.household_id', householdId)
     .order('submitted_at', { ascending: false })
@@ -98,7 +101,7 @@ export async function loadPendingChoreSubmissions(householdId: string): Promise<
   return (data ?? []).map((row) => {
     const r = row as Record<string, unknown>
     const chore = (Array.isArray(r.chores) ? r.chores[0] : r.chores) as
-      | { title?: string; reward?: ChoreReward; household_id?: string }
+      | { title?: string; reward?: ChoreReward; household_id?: string; due_at?: string | null }
       | null
       | undefined
     return {
@@ -108,10 +111,43 @@ export async function loadPendingChoreSubmissions(householdId: string): Promise<
       note: (r.note as string) ?? null,
       submittedAt: String(r.submitted_at),
       chore: chore
-        ? { title: String(chore.title ?? ''), reward: chore.reward ?? {}, householdId: String(chore.household_id) }
+        ? {
+            title: String(chore.title ?? ''),
+            reward: chore.reward ?? {},
+            householdId: String(chore.household_id),
+            dueAt: chore.due_at ?? null,
+          }
         : null,
     }
   })
+}
+
+/** Chores no longer live (completed/declined/cancelled/not_done), for the parent's history view. */
+export async function loadChoreHistory(householdId: string): Promise<Chore[]> {
+  if (!hasCloud()) return []
+  const { data, error } = await supabase()
+    .from('chores')
+    .select('*')
+    .eq('household_id', householdId)
+    .in('status', ['completed', 'declined', 'cancelled', 'not_done'])
+    .order('updated_at', { ascending: false })
+    .limit(50)
+  if (error) throw error
+  return (data ?? []).map((r) => mapChore(r as Record<string, unknown>))
+}
+
+/**
+ * Parent acknowledges a child-reported 'in_progress'/'not_done' status.
+ * Reopens the chore so it can be picked up again — acknowledging is not a
+ * reward decision, just clearing it from "needs your attention".
+ */
+export async function acknowledgeChoreProgress(choreId: string): Promise<void> {
+  if (!hasCloud()) return
+  const { error } = await supabase()
+    .from('chores')
+    .update({ status: 'open', updated_at: new Date().toISOString() })
+    .eq('id', choreId)
+  if (error) throw error
 }
 
 export async function createChore(
@@ -150,8 +186,14 @@ export async function cancelChore(choreId: string): Promise<void> {
  * so a second parent deciding the same submission a moment later, or a
  * double-tap on the button, cannot grant the reward twice. Only the parent
  * who wins that update goes on to touch `chores` or insert the reward.
+ *
+ * Returns `{ zeroed }` — true when the chore had a due date and this
+ * submission came in after it. The task can still be completed late; it
+ * just earns nothing, since the whole point of a due date is that the
+ * reward was for finishing in time. Nothing is clawed back because nothing
+ * was granted before this — there is exactly one reward write per chore.
  */
-export async function reviewChoreSubmission(submission: ChoreSubmission, approved: boolean): Promise<void> {
+export async function reviewChoreSubmission(submission: ChoreSubmission, approved: boolean): Promise<{ zeroed: boolean }> {
   if (!hasCloud()) throw new Error('Cloud service is not configured.')
   const db = supabase()
   const { data: session } = await db.auth.getSession()
@@ -171,6 +213,7 @@ export async function reviewChoreSubmission(submission: ChoreSubmission, approve
   if (claimError) throw claimError
   if (!claimed) throw new Error('Someone already reviewed that submission.')
 
+  let zeroed = false
   if (approved) {
     const { error } = await db
       .from('chores')
@@ -178,12 +221,16 @@ export async function reviewChoreSubmission(submission: ChoreSubmission, approve
       .eq('id', submission.choreId)
     if (error) throw error
 
+    const dueAt = submission.chore?.dueAt
+    zeroed = Boolean(dueAt && new Date(submission.submittedAt).getTime() > new Date(dueAt).getTime())
+    const reward = zeroed ? { ...submission.chore?.reward, screenTimeMinutes: 0, points: 0 } : (submission.chore?.reward ?? {})
+
     const { error: rewardError } = await db.from('reward_transactions').insert({
       household_id: submission.chore?.householdId,
       child_id: submission.childId,
       source: 'chore',
       status: 'approved',
-      payload: submission.chore?.reward ?? {},
+      payload: zeroed ? { ...reward, message: 'Completed after the deadline — no reward for this one.' } : reward,
       approved_by: userId,
     })
     if (rewardError) throw rewardError
@@ -200,4 +247,5 @@ export async function reviewChoreSubmission(submission: ChoreSubmission, approve
       .eq('id', submission.choreId)
     if (error) throw error
   }
+  return { zeroed }
 }

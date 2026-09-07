@@ -46,7 +46,7 @@ const NOTE_WINDOW_DAYS = 14
 const NOTE_PAGE = 50
 
 /** Mirrors `chores_status_check` / `chore_submissions_status_check` in the schema. */
-const CHORE_OPEN_STATUSES = ["open", "submitted"] as const
+const CHORE_OPEN_STATUSES = ["open", "submitted", "in_progress", "not_done"] as const
 /** Mirrors `child_requests_kind_check`. Reject anything else before it reaches Postgres. */
 const REQUEST_KINDS: ReadonlySet<string> = new Set([
   "extra_screen_time",
@@ -151,6 +151,13 @@ type Body = {
   /** Marks one chore done, from this child's side. */
   choreDone?: { choreId?: string; note?: string }
   /**
+   * Reports progress on a chore short of marking it done — 'in_progress' or
+   * 'not_done'. Separate from `choreDone`, which claims the chore and opens
+   * a review; this only updates status, no submission is created and no
+   * reward is ever implicated by either state.
+   */
+  choreStatus?: { choreId?: string; status?: 'in_progress' | 'not_done' }
+  /**
    * A request for something only a parent can grant — more time, an app, a
    * one-off unlock. Free-standing rather than folded into `events`: a request
    * needs a decision, not just a place in the feed.
@@ -158,6 +165,8 @@ type Body = {
   request?: { kind?: string; payload?: Record<string, unknown> }
   /** Whether to send back this child's approved rewards. */
   wantRewards?: boolean
+  /** Whether to send back this child's own past requests, any status. */
+  wantRequestHistory?: boolean
 }
 
 Deno.serve(async (req: Request) => {
@@ -473,6 +482,32 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  if (body.choreStatus?.choreId && (body.choreStatus.status === "in_progress" || body.choreStatus.status === "not_done")) {
+    const choreId = String(body.choreStatus.choreId)
+    const status = body.choreStatus.status
+
+    // Same claim shape as choreDone: only a chore this child could touch —
+    // unassigned or already theirs, not yet submitted or reviewed — moves.
+    // Neither state is a reward decision, so there is nothing to guard
+    // against a double-claim the way chore_submissions does; the update is
+    // idempotent either way.
+    const { data: updated, error: statusErr } = await admin
+      .from("chores")
+      .update({ status, child_id: childId, updated_at: now })
+      .eq("id", choreId)
+      .eq("household_id", child.household_id)
+      .in("status", ["open", "in_progress", "not_done"])
+      .or(`child_id.is.null,child_id.eq.${childId}`)
+      .select("id")
+      .maybeSingle()
+
+    if (statusErr) {
+      console.error("child-sync: chore status update failed", statusErr)
+      return json({ ok: false, error: "chore_status_failed" }, 500)
+    }
+    results.choreStatus = updated ? status : "unavailable"
+  }
+
   if (body.request?.kind) {
     const kind = String(body.request.kind)
     if (!REQUEST_KINDS.has(kind)) {
@@ -500,6 +535,9 @@ Deno.serve(async (req: Request) => {
     | undefined
   let rewardsOut:
     | { id: string; source: string; payload: Record<string, unknown>; createdAt: string | null }[]
+    | undefined
+  let requestHistoryOut:
+    | { id: string; kind: string; payload: Record<string, unknown>; status: string; requestedAt: string }[]
     | undefined
 
   if (body.wantChores) {
@@ -545,6 +583,27 @@ Deno.serve(async (req: Request) => {
       source: String(r.source),
       payload: (r.payload ?? {}) as Record<string, unknown>,
       createdAt: (r.created_at as string) ?? null,
+    }))
+  }
+
+  // A child's own requests, any status — the "My past requests" history a
+  // child otherwise has no way to see, since `wantRequests`-style reads were
+  // never built and RLS blocks a direct read the way it blocks direct writes.
+  if (body.wantRequestHistory) {
+    const { data: requests } = await admin
+      .from("child_requests")
+      .select("id, kind, payload, status, requested_at")
+      .eq("household_id", child.household_id)
+      .eq("child_id", childId)
+      .order("requested_at", { ascending: false })
+      .limit(30)
+
+    requestHistoryOut = (requests ?? []).map((r) => ({
+      id: String(r.id),
+      kind: String(r.kind),
+      payload: (r.payload ?? {}) as Record<string, unknown>,
+      status: String(r.status),
+      requestedAt: String(r.requested_at),
     }))
   }
 
@@ -614,6 +673,7 @@ Deno.serve(async (req: Request) => {
     ...(noteDelivered ? { noteDelivered } : {}),
     ...(choresOut ? { chores: choresOut } : {}),
     ...(rewardsOut ? { rewards: rewardsOut } : {}),
+    ...(requestHistoryOut ? { requestHistory: requestHistoryOut } : {}),
     locateNow: Boolean(locate),
   })
 })

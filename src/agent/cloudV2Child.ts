@@ -26,10 +26,22 @@ export type ChildChore = {
   description: string | null
   dueAt: string | null
   reward: { screenTimeMinutes?: number; points?: number }
-  /** 'open' — anyone may claim it. 'submitted' — awaiting a parent's review. */
-  status: 'open' | 'submitted'
+  /**
+   * 'open' — anyone may claim it. 'in_progress'/'not_done' — this child has
+   * reported status without submitting for review yet. 'submitted' —
+   * awaiting a parent's review.
+   */
+  status: 'open' | 'submitted' | 'in_progress' | 'not_done'
   /** Whether the pending submission, if any, is this child's own. */
   mine: boolean
+}
+
+export type ChildRequestHistoryItem = {
+  id: string
+  kind: string
+  payload: Record<string, unknown>
+  status: string
+  requestedAt: string
 }
 
 export type ChildReward = {
@@ -42,6 +54,7 @@ export type ChildReward = {
 type SyncResponse = {
   chores?: ChildChore[]
   rewards?: ChildReward[]
+  requestHistory?: ChildRequestHistoryItem[]
   accepted?: Record<string, unknown>
   error?: string
 }
@@ -99,6 +112,23 @@ export async function completeChore(
   return { ok: false, message: 'Could not send that. Try again.' }
 }
 
+/**
+ * Reports progress short of marking a task done — 'in_progress' or
+ * 'not_done'. Distinct from `completeChore`: neither state claims a review
+ * or implies a reward, they just update what the parent sees.
+ */
+export async function setChoreStatus(
+  choreId: string,
+  status: 'in_progress' | 'not_done',
+): Promise<{ ok: boolean; message: string }> {
+  const res = await post({ choreStatus: { choreId, status } })
+  if (!res) return { ok: false, message: 'Could not reach the family account. Try again.' }
+  if (res.accepted?.choreStatus === status) {
+    return { ok: true, message: status === 'in_progress' ? 'Marked as in progress.' : 'Let your parent know you could not finish this.' }
+  }
+  return { ok: false, message: 'That task is no longer available.' }
+}
+
 export async function submitChildRequest(
   kind: RequestKind,
   payload: Record<string, unknown>,
@@ -112,4 +142,10 @@ export async function submitChildRequest(
 export async function loadChildRewardsV2(): Promise<ChildReward[]> {
   const res = await post({ wantRewards: true })
   return res?.rewards ?? []
+}
+
+/** This child's own past requests, any status — "My past requests". */
+export async function loadChildRequestHistory(): Promise<ChildRequestHistoryItem[]> {
+  const res = await post({ wantRequestHistory: true })
+  return res?.requestHistory ?? []
 }

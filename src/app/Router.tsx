@@ -9,7 +9,7 @@ import { EmergencyContacts } from '../screens/contacts'
 import { Filtering } from '../screens/filtering'
 import { ChildLock, ChildNotice } from '../screens/child'
 import { ChildV2Home } from '../screens/ChildV2Home'
-import { ChildRoutinesV2, ChildRequestsV2, ChildRewardsV2, ChildChoresV2, ChildHubV2 } from '../screens/ChildV2'
+import { ChildRoutinesV2, ChildRequestsV2, ChildRequestHistoryV2, ChildRewardsV2, ChildChoresV2, ChildHubV2 } from '../screens/ChildV2'
 import { SchoolModeV2 } from '../screens/SchoolModeV2'
 import { ChoresV2 } from '../screens/ChoresV2'
 import { ChildSetup, RoleGate } from '../screens/setup'
@@ -29,7 +29,7 @@ const SCREENS: Record<ScreenId, () => JSX.Element> = {
   schoolModeV2:SchoolModeV2, choresV2:ChoresV2, map:MapZones, geofence:NewGeofence, screentime:ScreenTime, scenario:ScenarioEditor,
   activity:Filtering, trail:ActivityTrail, contacts:EmergencyContacts, alerts:Alerts, acoustic:AcousticAlert, hub:FamilyHub,
   tips:SafetyTips, roleGate:RoleGate, pair:CloudFirstDevices, childSetup:ChildSetup, household:Household, plans:Plans, report:ActivityReport,
-  childHome:ChildV2Home, childRoutines:ChildRoutinesV2, childRequests:ChildRequestsV2, childRewards:ChildRewardsV2, childChores:ChildChoresV2,
+  childHome:ChildV2Home, childRoutines:ChildRoutinesV2, childRequests:ChildRequestsV2, childRequestHistory:ChildRequestHistoryV2, childRewards:ChildRewardsV2, childChores:ChildChoresV2,
   childHub:ChildHubV2, childLock:ChildLock, childNotice:ChildNotice, webOverview:WebOverview, webSplit:WebSplit, paywall:Paywall,
 }
 

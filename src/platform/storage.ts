@@ -145,6 +145,16 @@ export const KEYS = {
    * tick or an app restart.
    */
   cloudSyncStatus: 'nestly.cloud.syncStatus',
+  /**
+   * "Cleared before" markers for the three history logs (request history,
+   * task/reward history, policy delivery status). A per-install view
+   * preference, not a data deletion — the underlying rows stay put, so
+   * clearing on one parent's phone can't hide history another parent in the
+   * same household hasn't looked at yet. Same pattern as `notesReadAt`.
+   */
+  requestHistoryClearedAt: 'nestly.history.requests.clearedAt',
+  taskHistoryClearedAt: 'nestly.history.tasks.clearedAt',
+  deliveryStatusClearedAt: 'nestly.history.delivery.clearedAt',
 } as const
 
 /** Per-child key suffixes, so each paired device keeps its own cursor. */
