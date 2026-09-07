@@ -45,6 +45,20 @@ const MAX_NOTE_LENGTH = 2000
 const NOTE_WINDOW_DAYS = 14
 const NOTE_PAGE = 50
 
+/** Mirrors `chores_status_check` / `chore_submissions_status_check` in the schema. */
+const CHORE_OPEN_STATUSES = ["open", "submitted"] as const
+/** Mirrors `child_requests_kind_check`. Reject anything else before it reaches Postgres. */
+const REQUEST_KINDS: ReadonlySet<string> = new Set([
+  "extra_screen_time",
+  "app_access",
+  "temporary_unlock",
+  "routine_exception",
+  "custom",
+])
+const MAX_CHORE_NOTE_LENGTH = 500
+const MAX_CHORES = 30
+const MAX_REWARDS = 50
+
 /**
  * Kinds that should reach a parent's phone as a notification rather than
  * waiting to be found in the feed. Must match `PUSH_KINDS` in push-notify,
@@ -132,6 +146,18 @@ type Body = {
   wantNotes?: boolean
   /** A fix taken because a parent asked, rather than on the timer. */
   locateFix?: { lat: number; lng: number; acc?: number; ts?: number }
+  /** Whether to send back the chore board. Skipped on plain telemetry pushes. */
+  wantChores?: boolean
+  /** Marks one chore done, from this child's side. */
+  choreDone?: { choreId?: string; note?: string }
+  /**
+   * A request for something only a parent can grant — more time, an app, a
+   * one-off unlock. Free-standing rather than folded into `events`: a request
+   * needs a decision, not just a place in the feed.
+   */
+  request?: { kind?: string; payload?: Record<string, unknown> }
+  /** Whether to send back this child's approved rewards. */
+  wantRewards?: boolean
 }
 
 Deno.serve(async (req: Request) => {
@@ -347,6 +373,138 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  /* ------------------------------------------------------------------ v2: chores, requests, rewards */
+  //
+  // `chores`, `child_requests` and `reward_transactions` are gated by
+  // `private.is_household_member(household_id)`, which resolves through
+  // `auth.uid()` — and a child device never signs in, by design, so it holds no
+  // `auth.uid()` at all. A child can therefore not read or write any of these
+  // three tables directly, no matter what key it presents; every attempt fails
+  // RLS silently. This is that missing door: the same device secret that
+  // already carries telemetry, events and notes carries these too.
+
+  if (body.choreDone?.choreId) {
+    const choreId = String(body.choreDone.choreId)
+    const note = typeof body.choreDone.note === "string"
+      ? body.choreDone.note.trim().slice(0, MAX_CHORE_NOTE_LENGTH)
+      : null
+
+    // Claim before recording, exactly as `locateFix` and event ingestion do:
+    // the conditional update is the lock. Only a chore that is still `open`,
+    // and either unassigned or already this child's, can be claimed — so two
+    // siblings racing for the same open chore cannot both get credit, and a
+    // retried request after a dropped response cannot claim a chore twice.
+    const { data: claimed, error: claimErr } = await admin
+      .from("chores")
+      .update({ status: "submitted", child_id: childId, updated_at: now })
+      .eq("id", choreId)
+      .eq("household_id", child.household_id)
+      .eq("status", "open")
+      .or(`child_id.is.null,child_id.eq.${childId}`)
+      .select("id")
+      .maybeSingle()
+
+    if (claimErr) {
+      console.error("child-sync: chore claim failed", claimErr)
+      return json({ ok: false, error: "chore_claim_failed" }, 500)
+    }
+
+    if (!claimed) {
+      // Already claimed by a sibling, already submitted, or not this
+      // household's chore. Recorded as a soft failure rather than a 500: the
+      // device sent a perfectly well-formed request for something that is no
+      // longer available, which is not a server error.
+      results.chore = "unavailable"
+    } else {
+      const { error: subErr } = await admin.from("chore_submissions").insert({
+        chore_id: choreId,
+        child_id: childId,
+        note,
+        status: "pending",
+      })
+      if (subErr) {
+        console.error("child-sync: chore submission failed", subErr)
+        return json({ ok: false, error: "chore_submission_failed" }, 500)
+      }
+      results.chore = "submitted"
+    }
+  }
+
+  if (body.request?.kind) {
+    const kind = String(body.request.kind)
+    if (!REQUEST_KINDS.has(kind)) {
+      results.request = "invalid_kind"
+    } else {
+      const { error } = await admin.from("child_requests").insert({
+        household_id: child.household_id,
+        child_id: childId,
+        device_id: null,
+        kind,
+        payload: body.request.payload ?? {},
+        status: "pending",
+        requested_at: now,
+      })
+      if (error) {
+        console.error("child-sync: request write failed", error)
+        return json({ ok: false, error: "request_write_failed" }, 500)
+      }
+      results.request = "sent"
+    }
+  }
+
+  let choresOut:
+    | { id: string; title: string; description: string | null; reward: Record<string, unknown>; status: string; mine: boolean; dueAt: string | null }[]
+    | undefined
+  let rewardsOut:
+    | { id: string; source: string; payload: Record<string, unknown>; createdAt: string | null }[]
+    | undefined
+
+  if (body.wantChores) {
+    // Open to the whole household, or already claimed by this child — never a
+    // sibling's claimed chore. `status=submitted` stays visible so a child can
+    // see their own pending review rather than a chore that simply vanished.
+    const { data: chores } = await admin
+      .from("chores")
+      .select("id, title, description, due_at, reward, status, child_id")
+      .eq("household_id", child.household_id)
+      .in("status", CHORE_OPEN_STATUSES)
+      .or(`child_id.is.null,child_id.eq.${childId}`)
+      .order("created_at", { ascending: false })
+      .limit(MAX_CHORES)
+
+    choresOut = (chores ?? []).map((c) => ({
+      id: String(c.id),
+      title: String(c.title),
+      description: (c.description as string) ?? null,
+      dueAt: (c.due_at as string) ?? null,
+      reward: (c.reward ?? {}) as Record<string, unknown>,
+      status: String(c.status),
+      // Whether the pending review, if any, is this child's own submission —
+      // an unassigned chore another sibling claimed a moment ago is excluded
+      // by the query above, so `mine` only ever distinguishes "submitted by
+      // me" from "still open for anyone."
+      mine: c.child_id === childId,
+    }))
+  }
+
+  if (body.wantRewards) {
+    const { data: rewards } = await admin
+      .from("reward_transactions")
+      .select("id, source, payload, created_at")
+      .eq("household_id", child.household_id)
+      .eq("child_id", childId)
+      .eq("status", "approved")
+      .order("created_at", { ascending: false })
+      .limit(MAX_REWARDS)
+
+    rewardsOut = (rewards ?? []).map((r) => ({
+      id: String(r.id),
+      source: String(r.source),
+      payload: (r.payload ?? {}) as Record<string, unknown>,
+      createdAt: (r.created_at as string) ?? null,
+    }))
+  }
+
   /* ----------------------------------------------------------------- locate */
   //
   // "Where are you now?", asked by a parent who is not going to wait out the
@@ -411,6 +569,8 @@ Deno.serve(async (req: Request) => {
     policyVersion: policy?.version ?? 0,
     ...(notesOut ? { notes: notesOut } : {}),
     ...(noteDelivered ? { noteDelivered } : {}),
+    ...(choresOut ? { chores: choresOut } : {}),
+    ...(rewardsOut ? { rewards: rewardsOut } : {}),
     locateNow: Boolean(locate),
   })
 })

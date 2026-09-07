@@ -3,6 +3,88 @@
 Written 12 August 2026. Paste the "Next tasks" section into a new session to
 pick up.
 
+**Everything below this notice is from mid-August and is stale in one
+important way: `main` gained ~150 commits from other sessions between then and
+7 September, including a second architecture ("v2": `devices`, `chores`,
+`chore_submissions`, `reward_transactions`, `child_requests`, `routines`,
+`safe_zones`, `policy_profiles`, `device_commands`) that most of this document
+does not know about.** The phones are on **v1.19 / versionCode 20**, not the
+v1.6 this document says below. Trust the code and the live schema over this
+file's specifics; the product philosophy (cloud-first, works offline, one
+authenticated door for a child device) still holds throughout.
+
+## 7 September — a real bug found, and Chores built
+
+Working from a folder of Gemini-generated mockups (`images/`) depicting a
+competitor-style app ("GuardianPulse"), the ask was to close the gap between
+those mockups and what Nestly actually does. Cross-checking against the app
+turned up something worth flagging loudly:
+
+**The v2 "Requests" and "Rewards" features were live in the UI but silently
+non-functional for every real child device.** `cloud/v2.ts`'s
+`createChildRequest` and `loadChildRewards` called `child_requests` and
+`reward_transactions` directly from the child app using the Supabase client —
+but both tables are gated by `private.is_household_member(household_id)`,
+which resolves through `auth.uid()`. A child device never signs in — that has
+been a deliberate invariant of this product since the first line of
+`child-sync` was written — so `auth.uid()` is always null on that device, and
+the check always failed. A child tapping "Send request" got a caught error and
+a vague message; nothing ever reached the database. This had shipped and
+presumably been live for a while with nobody noticing, because the *parent*
+side of the same feature (authenticated, so RLS passes) worked fine and looked
+identical from a demo.
+
+Fixed by routing both through `child-sync`, the same device-secret door notes
+and locate already use — see `agent/cloudV2Child.ts`. **If you add anything
+else the child app needs to read or write in `chores`, `child_requests`,
+`reward_transactions`, `devices`, or any other v2 table gated by
+`is_household_member`, it must go through an edge function with the service
+role, the same way. A direct Supabase call from the child app will compile,
+typecheck, and silently do nothing on a real device.**
+
+Built alongside the fix, using the same door: **Chores**, end to end —
+`chores`/`chore_submissions` tables existed with zero code anywhere before
+this. Parent creates a chore with a reward in minutes (`ChoresV2.tsx`, reached
+from Control Centre → Chores & rewards); child sees open chores and marks one
+done with an optional note (`ChildChoresV2` in `ChildV2.tsx`, reached from My
+Nestly → My chores); parent verifies and grants, or sends it back
+(`reviewChoreSubmission` in `cloud/v2.ts`). Claim-before-grant idempotency
+throughout, matching `push-notify`'s pattern: a chore is claimed with a
+conditional `UPDATE ... WHERE status='open'` before a submission is inserted,
+and a submission's review is claimed with a conditional `UPDATE ... WHERE
+status='pending'` before the reward is written — so two siblings racing an
+open chore, a retried request, or two parents deciding at once all resolve to
+exactly one outcome. Verified with a full round trip against the deployed
+function (`child-sync` v20): claim, duplicate-claim rejection, cross-sibling
+isolation, request submission, and the reward actually appearing back on the
+child's side after a simulated parent grant. Test rows cleaned up after.
+
+**What the mockups showed that is intentionally not built:**
+
+- *Per-app daily caps, individual app lock/unlock, PEGI age-rating filtering.*
+  Zero backend, zero frontend, on either architecture. This is a real gap, and
+  it is the one genuinely large item — Nestly's native filter blocks by
+  category (adult/violence/gambling/social) via a VPN service, not by
+  per-app usage quota, and enforcing a cap on one named app needs new native
+  Android work (Usage Access already reports per-app minutes for the report
+  screen, but reading is not enforcing). Do not attempt this without native
+  testing in the loop.
+- *Live GPS radar / safe zones as their own screen.* `safe_zones` and
+  `device_locations` exist in the schema with a reader in `cloud/v2.ts` but
+  **no writer anywhere** — nothing has ever inserted a row into either table.
+  Meanwhile geofencing already works, fully, on the original system
+  (`PolicyGeofence`, `MapZones` in `screens/parent.tsx`, arrival/departure
+  alerts, the lot). Building v2's parallel version would fragment location
+  data across two systems for a feature that already exists. Left alone
+  deliberately — if you're tempted to "finish" `safe_zones`, check first
+  whether the real intent is to migrate the working system's data into it,
+  not duplicate it.
+- *Downtime Schedule as a v2-native editor.* `routines` is read-only display
+  in `SchoolModeV2.tsx`; editing still delegates to the original scenario
+  editor (`go('scenario')`). This bridging is intentional, matches how
+  `ParentV2` treats School Mode, and the original `PolicyScenario` system
+  (School Hours, Bedtime) already does everything the mockup showed.
+
 ## What Nestly is
 
 A family safety app. A child's phone enforces routines, filters browsing, logs
