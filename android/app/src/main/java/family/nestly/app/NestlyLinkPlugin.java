@@ -44,6 +44,8 @@ import androidx.activity.result.ActivityResult;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
+import org.json.JSONObject;
+
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -797,6 +799,45 @@ public class NestlyLinkPlugin extends Plugin {
             }
         }
         return r;
+    }
+
+    /**
+     * Applies per-app daily caps, individual app locks, and a household PEGI
+     * ceiling — enforced by {@link NestlyAppGuardService} polling Usage
+     * Access, the same special permission {@link #getUsageToday} already
+     * needs. No VPN consent involved, unlike the DNS filter above.
+     */
+    @PluginMethod
+    public void setAppRules(PluginCall call) {
+        AppGuardRules rules = new AppGuardRules();
+        JSArray list = call.getArray("rules");
+        if (list != null) {
+            for (int i = 0; i < list.length(); i++) {
+                try {
+                    JSONObject rule = list.getJSONObject(i);
+                    String pkg = rule.optString("pkg", "");
+                    if (pkg.isEmpty()) continue;
+                    int capMinutes = rule.optInt("capMinutes", 0);
+                    boolean locked = rule.optBoolean("locked", false);
+                    rules.byPackage.put(pkg, new AppGuardRules.Rule(capMinutes, locked));
+                } catch (Exception ignored) {
+                    // One malformed rule must not drop every other app's rule.
+                }
+            }
+        }
+        rules.maxPegi = call.getInt("maxPegi", 0);
+
+        NestlyAppGuardService.setRules(rules);
+        Intent intent = new Intent(getContext(), NestlyAppGuardService.class);
+        if (rules.isEmpty()) {
+            intent.setAction(NestlyAppGuardService.ACTION_STOP);
+            getContext().startService(intent);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getContext().startForegroundService(intent);
+        } else {
+            getContext().startService(intent);
+        }
+        call.resolve();
     }
 
     /** Hands over block/warn decisions and the visited-domain tally. */

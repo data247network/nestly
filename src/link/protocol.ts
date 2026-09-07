@@ -243,6 +243,22 @@ export type Reminder = {
 
 export const MAX_REMINDERS = 12
 
+/**
+ * A per-app rule enforced natively on the child device: a daily minutes cap,
+ * an outright lock, or both. `pkg` is the Android package name, the only
+ * stable identifier across a phone's own app list and Usage Access reports.
+ */
+export type PolicyAppRule = {
+  pkg: string
+  label?: string
+  /** Minutes of foreground time allowed per day. Unset means no cap. */
+  capMinutes?: number
+  /** Blocked outright, independent of any cap. */
+  locked?: boolean
+}
+
+export const MAX_APP_RULES = 100
+
 /** Whether a reminder is due within `windowMin` after its time, on `when`. */
 export function reminderDueAt(r: Reminder, when: Date, windowMin = 2): boolean {
   if (!r.enabled) return false
@@ -267,6 +283,16 @@ export type Policy = {
   contacts?: EmergencyContact[]
   /** Optional so a policy from an older build still parses. */
   reminders?: Reminder[]
+  /** Optional so a policy from an older build still parses. */
+  appRules?: PolicyAppRule[]
+  /**
+   * Highest PEGI rating allowed to run unlocked. Only checked against apps
+   * the device recognises (see `PegiRatings` on the native side) — an unrated
+   * app is never auto-blocked by this alone, only by an explicit `locked` rule.
+   * Optional so a policy from an older build still parses, and unset means no
+   * PEGI enforcement at all.
+   */
+  maxPegi?: number
 }
 
 /** Parent confirms it has durably stored events up to and including `upTo`. */

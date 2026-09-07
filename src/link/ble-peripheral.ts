@@ -1,5 +1,5 @@
 import { registerPlugin } from '@capacitor/core'
-import { fromBase64, toBase64 } from './protocol'
+import { fromBase64, toBase64, type PolicyAppRule } from './protocol'
 import { BaseTransport, type Transport } from './transport'
 
 /**
@@ -103,6 +103,14 @@ export type NestlyLinkPlugin = {
     subtitle?: string
     contacts?: string[]
   }): Promise<void>
+
+  /**
+   * Per-app daily caps, individual app locks, and a household PEGI ceiling.
+   * Enforced by a foreground service polling Usage Access — no extra
+   * permission beyond what `getUsageToday` already needs. An empty `rules`
+   * array with no `maxPegi` stops the guard entirely.
+   */
+  setAppRules(opts: { rules: PolicyAppRule[]; maxPegi?: number }): Promise<void>
 
   /** Per-app screen time. Needs the Usage Access special permission. */
   hasUsageAccess(): Promise<{ granted: boolean }>

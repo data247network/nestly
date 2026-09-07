@@ -13,7 +13,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 type Body = {
   childId?: string
-  command?: "lock" | "unlock" | "locate" | "refresh"
+  command?: "lock" | "unlock" | "locate" | "refresh" | "apply_app_rules"
   payload?: Record<string, unknown>
 }
 

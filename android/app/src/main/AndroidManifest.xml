@@ -52,6 +52,13 @@
         <service android:name=".NestlyFilterService" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
         </service>
+        <!-- Per-app time caps, individual app lock and PEGI filtering. No type in
+             the fixed foreground-service list fits, so this uses specialUse — the
+             same category Android's own docs name parental-control apps under. -->
+        <service android:name=".NestlyAppGuardService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Per-app parental controls: usage caps, app lock and age-rating filtering" />
+        </service>
     </application>
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -71,6 +78,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />

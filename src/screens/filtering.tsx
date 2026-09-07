@@ -176,7 +176,124 @@ function Rules() {
         DNS" can go around it, and your child can switch the Nestly VPN off. If
         they do, you get an alert straight away.
       </div>
+
+      <AppLimits />
     </>
+  )
+}
+
+/* --------------------------------------------------------------- app limits */
+
+const PEGI_LEVELS = [3, 7, 12, 16, 18] as const
+
+/**
+ * PEGI thresholds and per-app caps/locks. A rule only exists once a parent has
+ * seen the app in the report below and acted on it — same "empty by design"
+ * reasoning as geofences, rather than asking a parent to hunt for an app that
+ * has not run yet.
+ */
+function AppLimits() {
+  const { state, dispatch } = useStore()
+  const rules = state.appRules.filter((r) => r.childIds.length === 0 || r.childIds.includes(state.activeChildId))
+
+  return (
+    <>
+      <div className="mt-1 text-[13.5px] font-bold">App limits</div>
+
+      <div className="rounded-2xl bg-cream px-3.5 py-3">
+        <div className="text-[12.5px] font-bold">Age rating (PEGI)</div>
+        <div className="mt-0.5 text-[11.5px] text-body">
+          Blocks an app rated above this, for the apps Nestly recognises.
+        </div>
+        <div className="mt-2.5 flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'setMaxPegi', value: null })}
+            className={`flex-1 rounded-xl py-2 text-[12px] font-bold ${
+              state.maxPegi == null ? 'bg-brand text-white' : 'bg-white text-body'
+            }`}
+          >
+            Off
+          </button>
+          {PEGI_LEVELS.map((level) => (
+            <button
+              key={level}
+              type="button"
+              onClick={() => dispatch({ type: 'setMaxPegi', value: level })}
+              className={`flex-1 rounded-xl py-2 text-[12px] font-bold ${
+                state.maxPegi === level ? 'bg-brand text-white' : 'bg-white text-body'
+              }`}
+            >
+              {level}
+            </button>
+          ))}
+        </div>
+        <div className="mt-2 text-[11px] leading-snug text-body">
+          Covers a seed list of well-known apps only. Anything Nestly doesn't
+          recognise is never blocked by this alone — lock it directly below or
+          from the app list above.
+        </div>
+      </div>
+
+      {rules.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          {rules.map((r) => (
+            <div key={r.pkg} className="flex items-center justify-between rounded-xl bg-cream px-3.5 py-2.5">
+              <div className="min-w-0">
+                <div className="truncate text-[12.5px] font-bold">{r.label ?? r.pkg}</div>
+                <div className="text-[11px] text-body">
+                  {r.locked ? 'Locked' : r.capMinutes ? `${r.capMinutes} min a day` : 'No limit'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => dispatch({ type: 'removeAppRule', pkg: r.pkg })}
+                className="shrink-0 text-[11.5px] font-bold text-coralInk"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+/** Inline cap + lock controls for one app row in the usage report. */
+function AppRuleRow({ pkg, label }: { pkg: string; label: string }) {
+  const { state, dispatch } = useStore()
+  const rule = state.appRules.find((r) => r.pkg === pkg)
+  const [draftCap, setDraftCap] = useState(String(rule?.capMinutes ?? ''))
+
+  return (
+    <div className="mt-1 flex items-center gap-2">
+      <input
+        value={draftCap}
+        onChange={(e) => setDraftCap(e.target.value.replace(/[^0-9]/g, ''))}
+        onBlur={() => {
+          const minutes = parseInt(draftCap, 10)
+          if (Number.isFinite(minutes) && minutes > 0) {
+            dispatch({ type: 'setAppRule', pkg, label, patch: { capMinutes: minutes } })
+          } else if (draftCap === '' && rule?.capMinutes != null) {
+            dispatch({ type: 'setAppRule', pkg, label, patch: { capMinutes: undefined } })
+          }
+        }}
+        placeholder="No cap"
+        inputMode="numeric"
+        className="w-20 rounded-lg border-[1.5px] border-line bg-white px-2 py-1 text-[11.5px] outline-none placeholder:text-muted focus:border-brand"
+      />
+      <span className="text-[10.5px] text-body">min/day</span>
+      <button
+        type="button"
+        onClick={() => dispatch({ type: 'setAppRule', pkg, label, patch: { locked: !rule?.locked } })}
+        className={`ml-auto shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold ${
+          rule?.locked ? 'bg-coralBg text-coralInk' : 'bg-white text-body'
+        }`}
+      >
+        {rule?.locked ? 'Locked' : 'Lock'}
+      </button>
+    </div>
   )
 }
 
@@ -242,6 +359,7 @@ function Report() {
               <span className="shrink-0 text-body">{fmtDuration(a.minutes)}</span>
             </div>
             <Meter pct={(a.minutes / maxApp) * 100} color={CAT_COLOR[a.category] ?? '#C9C2B4'} />
+            <AppRuleRow pkg={a.pkg} label={a.label} />
           </div>
         ))}
         {apps.length === 0 ? (

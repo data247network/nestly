@@ -55,6 +55,15 @@ function ParentCommandBridge() {
   const { household } = useCloudChildren()
   const lastLock = useRef<boolean | null>(null)
   const sending = useRef(false)
+  const lastAppRulesFingerprint = useRef<string | null>(null)
+
+  const resolveCloudChildId = (localId: string | null) => {
+    const remoteChildren = household?.children ?? []
+    const directRemote = localId ? remoteChildren.find((c) => c.id === localId) : null
+    const paired = liveChildren.find((c) => c.deviceId === localId && c.cloudChildId)
+    const fallback = remoteChildren.length === 1 ? remoteChildren[0] : null
+    return directRemote?.id ?? paired?.cloudChildId ?? fallback?.id ?? null
+  }
 
   useEffect(() => {
     if (!hasCloud()) return
@@ -69,11 +78,7 @@ function ParentCommandBridge() {
     lastLock.current = desired
 
     const activeId = state.activeChildId ?? state.children[0]?.id ?? null
-    const remoteChildren = household?.children ?? []
-    const directRemote = activeId ? remoteChildren.find((c) => c.id === activeId) : null
-    const paired = liveChildren.find((c) => c.deviceId === activeId && c.cloudChildId)
-    const fallback = remoteChildren.length === 1 ? remoteChildren[0] : null
-    const cloudChildId = directRemote?.id ?? paired?.cloudChildId ?? fallback?.id ?? null
+    const cloudChildId = resolveCloudChildId(activeId)
 
     if (!cloudChildId) return
 
@@ -84,6 +89,36 @@ function ParentCommandBridge() {
         sending.current = false
       })
   }, [state.lockNow, state.activeChildId, state.children, household, liveChildren])
+
+  /**
+   * Mirrors per-app caps/lock/PEGI into the durable command queue, the same
+   * way Lock now / Unlock already reaches a child outside Bluetooth range.
+   * Fingerprinted like `PolicyV2Bridge`'s resolved-policy check, so a parent
+   * scrolling the app list does not fire a command queue insert per render.
+   */
+  useEffect(() => {
+    if (!hasCloud()) return
+    const fingerprint = JSON.stringify([state.appRules, state.maxPegi])
+    if (lastAppRulesFingerprint.current === null) {
+      // Do not issue a command just because the parent app started.
+      lastAppRulesFingerprint.current = fingerprint
+      return
+    }
+    if (fingerprint === lastAppRulesFingerprint.current) return
+    lastAppRulesFingerprint.current = fingerprint
+
+    const activeId = state.activeChildId ?? state.children[0]?.id ?? null
+    const cloudChildId = resolveCloudChildId(activeId)
+    if (!cloudChildId) return
+
+    const rules = state.appRules.filter(
+      (r) => r.childIds.length === 0 || (activeId != null && r.childIds.includes(activeId)),
+    )
+    void sendParentCommand(cloudChildId, 'apply_app_rules', {
+      rules: rules.map((r) => ({ pkg: r.pkg, label: r.label, capMinutes: r.capMinutes, locked: r.locked })),
+      ...(state.maxPegi != null ? { maxPegi: state.maxPegi } : {}),
+    }).catch(() => {})
+  }, [state.appRules, state.maxPegi, state.activeChildId, state.children, household, liveChildren])
 
   return null
 }

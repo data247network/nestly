@@ -327,6 +327,25 @@ export class ChildAgent {
     }
   }
 
+  /**
+   * Applies per-app caps, individual app locks and the PEGI ceiling to the
+   * native app-guard service. No consent dialog involved — unlike the DNS
+   * filter, this needs no `VpnService`, only the Usage Access and overlay
+   * permissions the device already has for reporting and locking.
+   */
+  private async applyAppRules() {
+    if (!Capacitor.isNativePlatform()) return
+    try {
+      await NestlyLink.setAppRules({
+        rules: this.state.policy?.appRules ?? [],
+        maxPegi: this.state.policy?.maxPegi,
+      })
+    } catch {
+      // Older build without the method. The child simply runs with no
+      // per-app enforcement, same fallback posture as an older filter build.
+    }
+  }
+
   /** Drains block/warn decisions from the native filter into the event log. */
   private async collectFilterEvents() {
     if (!Capacitor.isNativePlatform()) return
@@ -895,6 +914,7 @@ export class ChildAgent {
         await this.persist()
         // New rules take effect immediately, not on the next tick.
         await this.applyFilter()
+        await this.applyAppRules()
         return
       }
 

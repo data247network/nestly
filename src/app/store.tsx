@@ -25,6 +25,7 @@ import type { PlanId } from './plans'
 import type {
   ActivityEntry,
   Alert,
+  AppRule,
   AppUsage,
   Child,
   Filters,
@@ -54,6 +55,14 @@ export type State = {
   activeChildId: string
   children: Child[]
   geofences: Geofence[]
+  /** Per-app daily caps and individual app locks, enforced natively on the child device. */
+  appRules: AppRule[]
+  /**
+   * Highest PEGI rating allowed to run unlocked, household-wide. `null` means
+   * no PEGI enforcement. Checked only against apps the device recognises —
+   * see the native `PegiRatings` seed table.
+   */
+  maxPegi: number | null
   scenarios: Scenario[]
   alerts: Alert[]
   messages: Message[]
@@ -133,6 +142,10 @@ export const INITIAL: State = {
   // parent creates the first one at their own location rather than inheriting
   // a sample zone in the wrong country.
   geofences: [],
+  // Empty by design, same reasoning as geofences: a cap only means something
+  // once the parent has actually seen which apps their child uses.
+  appRules: [],
+  maxPegi: null,
   // Two starting points, both fully editable and deletable. Unlike the sample
   // children these are not fiction — they are the routines nearly every
   // household wants, and having them pre-filled saves a parent starting at a
@@ -219,6 +232,11 @@ type Action =
   /** Add or remove a child from the zone being created. */
   | { type: 'toggleDraftFenceChild'; childId: string }
   | { type: 'removeFence'; id: string }
+  /** Upserts a per-app rule by package name; creates one covering every child if it doesn't exist yet. */
+  | { type: 'setAppRule'; pkg: string; label?: string; patch: Partial<Pick<AppRule, 'capMinutes' | 'locked'>> }
+  | { type: 'removeAppRule'; pkg: string }
+  | { type: 'toggleAppRuleChild'; pkg: string; childId: string }
+  | { type: 'setMaxPegi'; value: number | null }
   | { type: 'sendMessage'; text: string }
   | { type: 'dismissAlert'; id: string }
   /** Telemetry arrived from the paired child device. */
@@ -311,6 +329,10 @@ const POLICY_ACTIONS = new Set<Action['type']>([
   'toggleFence',
   'toggleFenceChild',
   'removeFence',
+  'setAppRule',
+  'removeAppRule',
+  'toggleAppRuleChild',
+  'setMaxPegi',
   'setLockNow',
   'addScenario',
   'patchScenario',
@@ -521,6 +543,38 @@ function apply(state: State, action: Action): State {
 
     case 'removeFence':
       return { ...state, geofences: state.geofences.filter((f) => f.id !== action.id) }
+
+    case 'setAppRule': {
+      const existing = state.appRules.find((r) => r.pkg === action.pkg)
+      const rule: AppRule = existing
+        ? { ...existing, ...action.patch, label: action.label ?? existing.label }
+        : { pkg: action.pkg, childIds: [], label: action.label, ...action.patch }
+      return {
+        ...state,
+        appRules: existing
+          ? state.appRules.map((r) => (r.pkg === action.pkg ? rule : r))
+          : [...state.appRules, rule],
+      }
+    }
+    case 'removeAppRule':
+      return { ...state, appRules: state.appRules.filter((r) => r.pkg !== action.pkg) }
+    case 'toggleAppRuleChild':
+      return {
+        ...state,
+        appRules: state.appRules.map((r) =>
+          r.pkg === action.pkg
+            ? {
+                ...r,
+                childIds: r.childIds.includes(action.childId)
+                  ? r.childIds.filter((c) => c !== action.childId)
+                  : [...r.childIds, action.childId],
+              }
+            : r,
+        ),
+      }
+    case 'setMaxPegi':
+      return { ...state, maxPegi: action.value }
+
     case 'sendMessage': {
       const text = action.text.trim()
       if (!text) return state
@@ -1015,6 +1069,8 @@ const Ctx = createContext<Store | null>(null)
 const PERSISTED_KEYS = [
   'scenarios',
   'geofences',
+  'appRules',
+  'maxPegi',
   'filters',
   'children',
   'alerts',
@@ -1075,6 +1131,10 @@ export function buildPolicy(state: State, childId?: string): Policy {
   const geofences = state.geofences.filter(
     (g) => g.childIds.length === 0 || childId == null || g.childIds.includes(childId),
   )
+  // Same per-child convention as geofences: empty childIds means every child.
+  const appRules = state.appRules.filter(
+    (r) => r.childIds.length === 0 || childId == null || r.childIds.includes(childId),
+  )
 
   return {
     t: 'policy',
@@ -1122,6 +1182,13 @@ export function buildPolicy(state: State, childId?: string): Policy {
         days: r.days,
         enabled: r.enabled,
       })),
+    appRules: appRules.map((r) => ({
+      pkg: r.pkg,
+      label: r.label,
+      capMinutes: r.capMinutes,
+      locked: r.locked,
+    })),
+    ...(state.maxPegi != null ? { maxPegi: state.maxPegi } : {}),
   }
 }
 
