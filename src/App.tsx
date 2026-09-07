@@ -10,7 +10,7 @@ import { CloudHydrate } from './app/CloudHydrate'
 import { CloudCommandBridge } from './app/CloudCommandBridge'
 import { NotesBridge } from './app/NotesBridge'
 import { PushBridge } from './app/PushBridge'
-import { WEB_SCREENS } from './app/nav'
+import { childScreenFor, WEB_SCREENS } from './app/nav'
 import { useStore } from './app/store'
 import { useDevice } from './platform/device'
 import { Showcase } from './showcase/Showcase'
@@ -64,7 +64,12 @@ export default function App() {
   if (wide && !native && showcaseRequested()) return <><PolicyBridge /><PolicyV2Bridge /><CloudBridge /><Showcase /></>
   if (!onboarded) return <div className="safe-top flex h-full flex-col bg-white"><Onboarding index={card} onNext={() => setCard((c) => Math.min(2, c + 1) as 0 | 1 | 2)} /></div>
   if (!role) return <div className="safe-top flex h-full flex-col bg-white"><RoleGate /></div>
-  if (role === 'child') return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id="childHome" /></div>
+  if (role === 'child') {
+    // See childScreenFor: this used to hardcode `childHome` regardless of
+    // state.screen, so every child-side `go(...)` — including the route to the
+    // in-app lock screen — updated state that nothing ever read.
+    return <div className="safe-top flex h-full flex-col bg-white"><CloudCommandBridge /><UpdateBanner /><Screen id={childScreenFor(state.screen)} /></div>
+  }
   const parentSignedIn = hasCloud() ? cloudSession === true : signedIn
   if (!parentSignedIn) return <div className="safe-top flex h-full flex-col bg-white"><Login onSignedIn={signIn} /></div>
   const isWebScreen = WEB_SCREENS.includes(state.screen)

@@ -8,10 +8,52 @@ important way: `main` gained ~150 commits from other sessions between then and
 7 September, including a second architecture ("v2": `devices`, `chores`,
 `chore_submissions`, `reward_transactions`, `child_requests`, `routines`,
 `safe_zones`, `policy_profiles`, `device_commands`) that most of this document
-does not know about.** The phones are on **v1.19 / versionCode 20**, not the
+does not know about.** The phones are on **v1.21 / versionCode 22**, not the
 v1.6 this document says below. Trust the code and the live schema over this
 file's specifics; the product philosophy (cloud-first, works offline, one
 authenticated door for a child device) still holds throughout.
+
+## 7 September, later the same day — the child app's whole router was dead
+
+Reported as "My chores is not clickable, same with other functions." It was
+not a click problem. `App.tsx`'s `role === 'child'` branch hardcoded
+`<Screen id="childHome" />` and never read `state.screen` at all. Every
+`go('childChores')` / `go('childRoutines')` / `go('childRequests')` /
+`go('childRewards')` from `ChildV2Home` — all four of the action cards, not
+just the new one — fired correctly and wrote the new screen into the store
+correctly. Nothing ever rendered it. From the child's side that is
+indistinguishable from the button being dead: tap it, nothing visibly changes.
+
+Fixed with `childScreenFor()` in `app/nav.ts` (validates `state.screen` against
+`CHILD_SCREENS`, falls back to `childHome`), used in `App.tsx` instead of the
+hardcoded id. Pinned with a real test — `app/nav.test.ts` — since this project
+has no component-render test infrastructure (every existing test is
+pure-logic/reducer, not React Testing Library), extracting the fallback into a
+named pure function was what made it testable at all rather than leaving it
+as inline JSX logic nobody could pin down.
+
+**Found in the same pass, not yet fixed, and worth a deliberate decision
+rather than a rushed one: nothing anywhere calls `go('childLock')`.** The
+in-app JS lock screen (`ChildLock`) has been completely unreachable — same
+root cause, but the consequence is bigger than a dead button.
+`childAgent.ts`'s `applyLock()` comment says outright: *"Older build without
+the [native overlay] method, or permission revoked. The in-app lock screen
+still shows; enforcement is simply weaker."* That assumption is false right
+now. On a device where the overlay permission has been revoked (or is simply
+never granted), a routine locking the phone produces **zero visible
+enforcement** — `NestlyLink.setLocked` throws, is caught, and nothing else
+happens; the child stays on whatever screen they were on, oblivious, while the
+parent's app believes the phone is locked. The native overlay
+(`NestlyLockOverlay.java`) is very likely still doing the real enforcement on
+most devices — that path doesn't depend on `state.screen` at all — but the JS
+fallback layer the code's own comments assume exists does not, and nobody
+should assume it does until this is deliberately fixed. Two real options, not
+picked here: have `App.tsx` force `childLock` onto screen the moment
+`agent.locked` flips true (overriding whatever the child was doing,
+matching how the pre-v2 `ChildHome` used to intercept before rendering tabs at
+all), or give `ChildV2Home` itself a locked-state takeover view. Either is a
+safety-enforcement decision, not a one-line fix — do not bundle it into an
+unrelated change.
 
 ## 7 September — a real bug found, and Chores built
 

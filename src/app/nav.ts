@@ -17,8 +17,26 @@ export const LABELS: Record<ScreenId, string> = {
 
 export const WEB_SCREENS: ScreenId[] = ['webOverview', 'webSplit', 'paywall']
 export const ALL_SCREENS: ScreenId[] = NAV_GROUPS.flatMap((g) => g.items)
-const CHILD_SCREENS: ScreenId[] = ['childHome', 'childRoutines', 'childRequests', 'childRewards', 'childChores', 'childLock', 'childNotice']
+export const CHILD_SCREENS: ScreenId[] = ['childHome', 'childRoutines', 'childRequests', 'childRewards', 'childChores', 'childLock', 'childNotice']
 export function surfaceOf(id: ScreenId): Surface { if (WEB_SCREENS.includes(id)) return 'web'; if (CHILD_SCREENS.includes(id)) return 'child'; return 'parent' }
+
+/**
+ * What to actually render for a child device, given whatever `state.screen`
+ * currently holds.
+ *
+ * Exists because `App.tsx` once rendered `childHome` unconditionally for every
+ * child device, ignoring `state.screen` entirely — so `go('childChores')` (or
+ * any other child navigation, including the route to the in-app lock screen)
+ * updated the store correctly and nothing ever read it. Tapping the button
+ * looked identical to the button being dead.
+ *
+ * Falls back to `childHome` for anything not in `CHILD_SCREENS`, so a
+ * parent-only id left over from switching a device's role cannot leak through
+ * and render the wrong surface on a child's phone.
+ */
+export function childScreenFor(screen: ScreenId): ScreenId {
+  return CHILD_SCREENS.includes(screen) ? screen : 'childHome'
+}
 export const TABS: { id: ScreenId; label: string }[] = [
   { id: 'v2control', label: 'Home' }, { id: 'schoolModeV2', label: 'School' }, { id: 'map', label: 'Map' }, { id: 'screentime', label: 'Limits' }, { id: 'hub', label: 'Hub' }, { id: 'pair', label: 'Devices' },
 ]
